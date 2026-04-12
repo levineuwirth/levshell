@@ -1,0 +1,37 @@
+[package]
+name = "levshell-daemon"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "The Levshell daemon: owns the unified data store, event bus, context engine, modules, and IPC server."
+
+[lib]
+name = "levshell_daemon"
+path = "src/lib.rs"
+
+[[bin]]
+name = "levshell-daemon"
+path = "src/main.rs"
+
+[dependencies]
+levshell-core.workspace = true
+levshell-data.workspace = true
+levshell-ipc.workspace = true
+levshell-context.workspace = true
+levshell-sync.workspace = true
+levshell-config.workspace = true
+levshell-modules.workspace = true
+
+tokio = { workspace = true, features = ["full"] }
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+serde_json.workspace = true
+async-trait.workspace = true

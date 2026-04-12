@@ -1,0 +1,20 @@
+[package]
+name = "levshell-ipc"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Levshell IPC: codec trait, message types, Unix socket server/client between daemon and QML shell."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tokio = { workspace = true, features = ["rt", "net", "io-util", "sync", "macros", "fs"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+tempfile = "3"

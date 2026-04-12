@@ -1,0 +1,26 @@
+[package]
+name = "levshell-modules"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Built-in Levshell modules: workspace indicator, telemetry, notifications, command palette, and friends."
+
+[dependencies]
+levshell-core.workspace = true
+levshell-data.workspace = true
+levshell-config.workspace = true
+levshell-ipc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+async-trait.workspace = true
+futures-util.workspace = true
+swayipc-async.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

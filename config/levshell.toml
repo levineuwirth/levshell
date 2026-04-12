@@ -1,0 +1,22 @@
+# Levshell global configuration.
+#
+# This file lives at ~/.config/levshell/levshell.toml. Per-module configs go in
+# ~/.config/levshell/modules/<name>.toml; sync adapter configs go in
+# ~/.config/levshell/sync/<provider>.toml; project declarations in
+# ~/.config/levshell/projects/<slug>.toml.
+#
+# Phase 0: this file is a stub. The schema firms up in Phase 1 alongside the
+# context engine and module system.
+
+[shell]
+# "full" | "compact" | "hidden"
+density = "full"
+
+[power]
+# When the system is on battery, all module poll intervals are doubled
+# (or set to a module-specific battery interval). Set to false to disable.
+power_aware = true
+
+[ipc]
+# Override only if $XDG_RUNTIME_DIR is unset or you want a custom path.
+# socket_path = "/run/user/1000/levshell.sock"

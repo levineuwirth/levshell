@@ -1,0 +1,19 @@
+[package]
+name = "levshell-sync"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Levshell sync engine and external-tool sync adapters (Obsidian, Zotero, Anki, ...)."
+
+[dependencies]
+levshell-core.workspace = true
+levshell-data.workspace = true
+levshell-config.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "time"] }

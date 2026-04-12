@@ -1,0 +1,20 @@
+[package]
+name = "levshell-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Levshell core: typed event bus, module trait, module runner, widget descriptors."
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+async-trait.workspace = true
+uuid.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }

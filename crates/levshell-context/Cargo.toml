@@ -1,0 +1,18 @@
+[package]
+name = "levshell-context"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Levshell context engine: input signals, resolution layers, relevance rules, hysteresis."
+
+[dependencies]
+levshell-core.workspace = true
+levshell-data.workspace = true
+levshell-config.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
