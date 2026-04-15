@@ -19,8 +19,10 @@
 //! entry at scan time and is cached on [`DesktopEntry::icon_path`],
 //! so the live query path stays filesystem-free.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 
@@ -667,15 +669,154 @@ fn extensions_for_subdir(subdir: &str) -> &'static [&'static str] {
     }
 }
 
+// =====================================================================
+// Launch history (recency ranking)
+// =====================================================================
+
+/// Maximum recency boost applied to an entry with age=0 (launched
+/// now). Chosen so that a recently-used but imperfectly-matching
+/// entry (base ~0.8) still ranks above an exact-name match with no
+/// history (floor 0.9 = 1.0 minus 0.1), without letting stale
+/// favorites dominate above a genuine exact-name match for the
+/// current query.
+const RECENCY_BOOST_MAX: f64 = 0.1;
+
+/// Half-life of the recency decay, in days. The boost follows
+/// `MAX * exp(-age_days / HALF_LIFE_DAYS)`, so at age=7 the boost is
+/// `MAX / e ≈ 0.037`, and by age=30 it's ~0.001 (effectively gone).
+const RECENCY_HALF_LIFE_DAYS: f64 = 7.0;
+
+/// Per-entry launch history — `entry_id → last launch unix timestamp
+/// (seconds)`. Persisted to `$XDG_STATE_HOME/levshell/launches.json`
+/// on every successful launch. Used by [`scored_with_recency`] to
+/// boost recently-used apps so they surface first for empty / short
+/// queries.
+#[derive(Debug, Default, Clone)]
+pub struct LaunchHistory {
+    entries: BTreeMap<String, i64>,
+    /// Where to write on `record`. An empty path skips persistence
+    /// (used by tests / in-memory instances).
+    path: PathBuf,
+}
+
+impl LaunchHistory {
+    /// Load the history from `path`, or return an empty instance if
+    /// the file is missing / unreadable / malformed. Errors are
+    /// logged, not propagated.
+    pub fn load(path: PathBuf) -> Self {
+        let entries = match std::fs::read_to_string(&path) {
+            Ok(text) => serde_json::from_str::<BTreeMap<String, i64>>(&text)
+                .unwrap_or_else(|e| {
+                    tracing::warn!(error = %e, path = %path.display(), "launches: parse failed, starting fresh");
+                    BTreeMap::new()
+                }),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
+            Err(e) => {
+                tracing::warn!(error = %e, path = %path.display(), "launches: read failed, starting fresh");
+                BTreeMap::new()
+            }
+        };
+        Self { entries, path }
+    }
+
+    /// Build an in-memory history with no persistence path. Used by
+    /// tests that want to drive scoring without touching the
+    /// filesystem.
+    pub fn in_memory() -> Self {
+        Self {
+            entries: BTreeMap::new(),
+            path: PathBuf::new(),
+        }
+    }
+
+    /// Record a launch of `entry_id` at the current time and persist
+    /// to disk. File write failures are logged, not propagated.
+    pub fn record(&mut self, entry_id: &str) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        self.entries.insert(entry_id.to_owned(), now);
+        self.persist();
+    }
+
+    /// Directly set a launch timestamp. Used by tests to simulate a
+    /// specific history without needing to freeze system time.
+    #[cfg(test)]
+    pub fn set_launch_time(&mut self, entry_id: &str, unix_ts: i64) {
+        self.entries.insert(entry_id.to_owned(), unix_ts);
+    }
+
+    /// Return the unix timestamp of the last launch for `entry_id`,
+    /// or `None` if never launched.
+    pub fn last_launch(&self, entry_id: &str) -> Option<i64> {
+        self.entries.get(entry_id).copied()
+    }
+
+    /// Compute the recency boost for an entry given the current
+    /// time. Returns `0.0` for entries with no launch history.
+    ///
+    /// Formula: `RECENCY_BOOST_MAX * exp(-age_days / RECENCY_HALF_LIFE_DAYS)`
+    pub fn recency_boost(&self, entry_id: &str, now_unix: i64) -> f64 {
+        let Some(last) = self.last_launch(entry_id) else {
+            return 0.0;
+        };
+        let age_seconds = (now_unix - last).max(0);
+        let age_days = age_seconds as f64 / 86_400.0;
+        RECENCY_BOOST_MAX * (-age_days / RECENCY_HALF_LIFE_DAYS).exp()
+    }
+
+    fn persist(&self) {
+        if self.path.as_os_str().is_empty() {
+            return;
+        }
+        if let Some(parent) = self.path.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                tracing::warn!(error = %e, path = %parent.display(), "launches: mkdir failed");
+                return;
+            }
+        }
+        match serde_json::to_string_pretty(&self.entries) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(&self.path, json) {
+                    tracing::warn!(error = %e, path = %self.path.display(), "launches: write failed");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "launches: serialize failed");
+            }
+        }
+    }
+}
+
+/// Default path to the launches history file. Follows XDG state
+/// convention: `$XDG_STATE_HOME/levshell/launches.json`, falling
+/// back to `$HOME/.local/state/levshell/launches.json`.
+pub fn default_launches_path() -> PathBuf {
+    if let Some(state) = std::env::var_os("XDG_STATE_HOME") {
+        return PathBuf::from(state).join("levshell/launches.json");
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        return PathBuf::from(home).join(".local/state/levshell/launches.json");
+    }
+    PathBuf::from("/tmp/levshell-launches.json")
+}
+
+// =====================================================================
+// AppLauncherProvider
+// =====================================================================
+
 pub struct AppLauncherProvider {
     entries: Arc<Mutex<Vec<DesktopEntry>>>,
+    launches: Arc<Mutex<LaunchHistory>>,
 }
 
 impl AppLauncherProvider {
-    /// Construct a provider by scanning the XDG `.desktop` directories
-    /// **and** resolving each entry's `Icon=` value through the
-    /// freedesktop icon theme search path. Runs once at startup; the
-    /// cached icon paths let the live query path stay filesystem-free.
+    /// Construct a provider by scanning the XDG `.desktop` directories,
+    /// resolving each entry's `Icon=` value through the freedesktop
+    /// icon theme search path, and loading the launch history for
+    /// recency ranking. Runs once at startup; the cached icon paths
+    /// let the live query path stay filesystem-free.
     pub fn new() -> Self {
         let mut entries = scan_desktop_entries(&default_search_paths());
         let resolver = IconResolver::new();
@@ -684,23 +825,36 @@ impl AppLauncherProvider {
                 entry.icon_path = resolver.resolve(name);
             }
         }
-        Self::from_entries(entries)
+        let launches = LaunchHistory::load(default_launches_path());
+        Self::from_entries_with_history(entries, launches)
     }
 
-    /// Construct a provider from pre-built entries. Used by tests and
-    /// by callers that want to skip filesystem scanning. Does *not*
-    /// re-run the icon resolver — caller is responsible for populating
-    /// `icon_path` on each entry if icons are desired.
+    /// Construct a provider from pre-built entries with an empty
+    /// in-memory launch history. Used by tests and by callers that
+    /// want to skip filesystem scanning. Does *not* re-run the icon
+    /// resolver — caller is responsible for populating `icon_path`
+    /// on each entry if icons are desired.
     pub fn from_entries(entries: Vec<DesktopEntry>) -> Self {
+        Self::from_entries_with_history(entries, LaunchHistory::in_memory())
+    }
+
+    /// Construct a provider from pre-built entries **and** an
+    /// explicit launch history. Used by recency tests that want to
+    /// drive ranking from a known history.
+    pub fn from_entries_with_history(
+        entries: Vec<DesktopEntry>,
+        launches: LaunchHistory,
+    ) -> Self {
         Self {
             entries: Arc::new(Mutex::new(entries)),
+            launches: Arc::new(Mutex::new(launches)),
         }
     }
 
     /// Rescan the XDG directories. Useful if a config reload wants to
     /// pick up new apps without restarting the daemon; not used in
     /// Phase 1.5 directly. Re-runs the icon resolver for each fresh
-    /// entry.
+    /// entry. Launch history is preserved across the rescan.
     pub fn rescan(&self) {
         let mut fresh = scan_desktop_entries(&default_search_paths());
         let resolver = IconResolver::new();
@@ -749,6 +903,20 @@ fn score_entry(entry: &DesktopEntry, query: &str) -> Option<f64> {
     None
 }
 
+/// Compute the final score for an entry, layering a recency boost
+/// on top of [`score_entry`]. Returns `None` when the base score is
+/// `None` (i.e. the entry doesn't match the query at all — recency
+/// alone never promotes a non-matching entry into the result set).
+fn scored_with_recency(
+    entry: &DesktopEntry,
+    query: &str,
+    history: &LaunchHistory,
+    now_unix: i64,
+) -> Option<f64> {
+    let base = score_entry(entry, query)?;
+    Some(base + history.recency_boost(&entry.id, now_unix))
+}
+
 #[async_trait]
 impl PaletteProvider for AppLauncherProvider {
     fn name(&self) -> &'static str {
@@ -760,10 +928,18 @@ impl PaletteProvider for AppLauncherProvider {
             let lock = self.entries.lock().expect("app-launcher mutex poisoned");
             lock.clone()
         };
+        let history = {
+            let lock = self.launches.lock().expect("app-launcher launches poisoned");
+            lock.clone()
+        };
+        let now_unix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
         let mut out: Vec<PaletteItem> = entries
             .iter()
             .filter_map(|e| {
-                score_entry(e, query).map(|score| {
+                scored_with_recency(e, query, &history, now_unix).map(|score| {
                     let mut item =
                         PaletteItem::new(APP_LAUNCHER_PROVIDER, e.id.clone(), e.name.clone())
                             .with_score(score)
@@ -808,6 +984,17 @@ impl PaletteProvider for AppLauncherProvider {
         spawn_detached(&prog, &args).map_err(|e| {
             ProviderError::ExecuteFailed(format!("spawn {prog}: {e}"))
         })?;
+        // Record the launch for recency ranking on the next query.
+        // Persisted to disk via `LaunchHistory::record`; failures
+        // are logged, not propagated (a write failure must never
+        // abort the launch that already succeeded).
+        {
+            let mut history = self
+                .launches
+                .lock()
+                .expect("app-launcher launches poisoned");
+            history.record(&entry.id);
+        }
         tracing::info!(app = %entry.name, exec = %entry.exec, "app-launcher: spawned");
         Ok(())
     }
@@ -1455,4 +1642,205 @@ Exec=firefox
         );
     }
 
+    // ----- launch history tests -----
+
+    const DAY: i64 = 86_400;
+
+    fn test_entry(id: &str, name: &str) -> DesktopEntry {
+        DesktopEntry {
+            id: id.into(),
+            name: name.into(),
+            exec: id.into(),
+            comment: None,
+            icon_name: None,
+            icon_path: None,
+        }
+    }
+
+    #[test]
+    fn launch_history_load_missing_file_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("launches.json");
+        let history = LaunchHistory::load(path);
+        assert!(history.last_launch("firefox").is_none());
+    }
+
+    #[test]
+    fn launch_history_load_malformed_file_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("launches.json");
+        std::fs::write(&path, b"not json at all").unwrap();
+        let history = LaunchHistory::load(path);
+        assert!(history.last_launch("firefox").is_none());
+    }
+
+    #[test]
+    fn launch_history_record_persists_and_roundtrips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("launches.json");
+        {
+            let mut history = LaunchHistory::load(path.clone());
+            history.record("firefox");
+        }
+        let reloaded = LaunchHistory::load(path);
+        assert!(reloaded.last_launch("firefox").is_some());
+    }
+
+    #[test]
+    fn launch_history_record_creates_parent_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        // Parent directory intentionally does not exist yet —
+        // `record` should `create_dir_all` it before writing.
+        let path = dir.path().join("nested/state/levshell/launches.json");
+        let mut history = LaunchHistory::load(path.clone());
+        history.record("firefox");
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn launch_history_in_memory_skips_persistence() {
+        // In-memory histories have an empty path and must not try
+        // to write (would panic or error on invalid path).
+        let mut history = LaunchHistory::in_memory();
+        history.record("firefox");
+        assert!(history.last_launch("firefox").is_some());
+    }
+
+    #[test]
+    fn recency_boost_for_never_launched_entry_is_zero() {
+        let history = LaunchHistory::in_memory();
+        assert_eq!(history.recency_boost("firefox", 1000), 0.0);
+    }
+
+    #[test]
+    fn recency_boost_at_age_zero_is_max() {
+        let mut history = LaunchHistory::in_memory();
+        history.set_launch_time("firefox", 1000);
+        let boost = history.recency_boost("firefox", 1000);
+        assert!((boost - 0.1).abs() < 1e-9, "boost={boost}");
+    }
+
+    #[test]
+    fn recency_boost_decays_at_half_life() {
+        // At exactly 7 days old, boost should equal MAX / e.
+        let mut history = LaunchHistory::in_memory();
+        history.set_launch_time("firefox", 0);
+        let boost = history.recency_boost("firefox", 7 * DAY);
+        let expected = 0.1 / std::f64::consts::E;
+        assert!(
+            (boost - expected).abs() < 1e-6,
+            "boost={boost} expected={expected}"
+        );
+    }
+
+    #[test]
+    fn recency_boost_decays_aggressively_after_a_month() {
+        // At 30 days old the boost should be nearly gone (< 0.005).
+        let mut history = LaunchHistory::in_memory();
+        history.set_launch_time("firefox", 0);
+        let boost = history.recency_boost("firefox", 30 * DAY);
+        assert!(boost < 0.005, "boost={boost} — should be ~0 by 30 days");
+    }
+
+    #[test]
+    fn recency_boost_clamps_future_timestamps_to_zero_age() {
+        // If a launch timestamp is somehow in the future (clock
+        // skew), treat it as age=0 rather than a negative age that
+        // inflates the boost via exp of a positive number.
+        let mut history = LaunchHistory::in_memory();
+        history.set_launch_time("firefox", 1_000_000);
+        let boost = history.recency_boost("firefox", 0);
+        assert!((boost - 0.1).abs() < 1e-9, "boost={boost}");
+    }
+
+    // ----- scored_with_recency tests -----
+
+    #[test]
+    fn scored_with_recency_returns_none_for_non_matching_entry() {
+        // Recency alone must not promote an entry that doesn't
+        // match the query into the result set.
+        let entry = test_entry("firefox", "Firefox");
+        let mut history = LaunchHistory::in_memory();
+        history.set_launch_time("firefox", 0);
+        let score = scored_with_recency(&entry, "supercalifragilistic", &history, 0);
+        assert!(score.is_none());
+    }
+
+    #[test]
+    fn scored_with_recency_empty_query_adds_boost_to_base() {
+        let entry = test_entry("firefox", "Firefox");
+        let mut history = LaunchHistory::in_memory();
+        history.set_launch_time("firefox", 100);
+        let score = scored_with_recency(&entry, "", &history, 100).unwrap();
+        // Base for empty query = 0.4, boost at age=0 = 0.1.
+        assert!((score - 0.5).abs() < 1e-9, "score={score}");
+    }
+
+    #[test]
+    fn scored_with_recency_recent_launch_ranks_above_cold_entry() {
+        let recent = test_entry("firefox", "Firefox");
+        let cold = test_entry("gedit", "Text Editor");
+        let mut history = LaunchHistory::in_memory();
+        history.set_launch_time("firefox", 0);
+        let recent_score = scored_with_recency(&recent, "", &history, 0).unwrap();
+        let cold_score = scored_with_recency(&cold, "", &history, 0).unwrap();
+        assert!(
+            recent_score > cold_score,
+            "recent={recent_score} cold={cold_score}"
+        );
+    }
+
+    #[test]
+    fn scored_with_recency_exact_name_match_still_tops_recent_prefix_match() {
+        // Entry A exactly matches "foo" but has no history.
+        // Entry B is a recent prefix match "foobar".
+        // Exact match (base=1.0) must still beat recent prefix
+        // (base=0.9 + boost=0.1 = 1.0) — ties break alphabetically
+        // and "foo" sorts before "foobar".
+        let exact = test_entry("a", "foo");
+        let prefix = test_entry("b", "foobar");
+        let mut history = LaunchHistory::in_memory();
+        history.set_launch_time("b", 0);
+        let exact_score = scored_with_recency(&exact, "foo", &history, 0).unwrap();
+        let prefix_score = scored_with_recency(&prefix, "foo", &history, 0).unwrap();
+        assert!(
+            exact_score >= prefix_score,
+            "exact={exact_score} prefix={prefix_score}"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_ranks_recent_launches_first_for_empty_query() {
+        let mut history = LaunchHistory::in_memory();
+        // Simulate "gedit was launched 3 minutes ago".
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        history.set_launch_time("gedit", now - 180);
+        let provider = AppLauncherProvider::from_entries_with_history(
+            vec![
+                test_entry("firefox", "Firefox"),
+                test_entry("gedit", "Text Editor"),
+            ],
+            history,
+        );
+        let hits = provider.search("").await;
+        assert_eq!(hits.len(), 2);
+        // gedit should be first because it has a recency boost.
+        assert_eq!(hits[0].id, "gedit");
+        assert_eq!(hits[1].id, "firefox");
+    }
+
+    #[test]
+    fn default_launches_path_uses_xdg_state_home_when_set() {
+        // Can't manipulate env safely in a parallel test runner, so
+        // just assert the path ends with the expected suffix.
+        let path = default_launches_path();
+        let s = path.to_string_lossy();
+        assert!(
+            s.ends_with("levshell/launches.json"),
+            "unexpected path: {s}"
+        );
+    }
 }
