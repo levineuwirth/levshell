@@ -46,10 +46,16 @@ WidgetWrapper {
         return (bps / 1024 / 1024).toFixed(1) + "M/s";
     }
 
+    // Phosphor network icon — wifi signal tiers when quality metadata
+    // is present (wireless interface), generic network plug for wired
+    // or metadata-free interfaces, slash when no primary connection.
     readonly property string icon: {
-        if (!primary) return "⇅";
-        if (primary.quality_percent !== null && primary.quality_percent !== undefined) return "⎌";
-        return "⇅";
+        if (!primary) return Theme.iconWifiSlash;
+        const q = primary.quality_percent;
+        if (q === null || q === undefined) return Theme.iconNetwork;
+        if (q < 33) return Theme.iconWifiLow;
+        if (q < 66) return Theme.iconWifiMedium;
+        return Theme.iconWifiHigh;
     }
 
     readonly property color qualityColor: {
@@ -71,6 +77,7 @@ WidgetWrapper {
             anchors.verticalCenter: parent.verticalCenter
             text: root.icon
             color: root.qualityColor
+            font.family:    Theme.fontIcon
             font.pixelSize: Theme.iconSizeFull
         }
 

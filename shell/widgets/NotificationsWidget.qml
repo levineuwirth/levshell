@@ -24,8 +24,9 @@ WidgetWrapper {
 
         Text {
             anchors.verticalCenter: parent.verticalCenter
-            text: "◈"
+            text: Theme.iconBell
             color: root.bellColor
+            font.family:    Theme.fontIcon
             font.pixelSize: Theme.iconSizeFull
         }
 

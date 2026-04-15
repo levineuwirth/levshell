@@ -274,12 +274,15 @@ Rectangle {
         root.onSelect(item.provider, item.id);
     }
 
+    // Phosphor glyph fallback for result rows without a resolved
+    // filesystem icon path. Keyed on the provider-supplied `icon`
+    // hint (set by each PaletteProvider in the daemon).
     function iconFor(hint) {
         switch (hint) {
-        case "app":       return "▶";
-        case "workspace": return "◫";
-        case "note":      return "✎";
-        default:          return "•";
+        case "app":       return Theme.iconAppWindow;
+        case "workspace": return Theme.iconSquaresFour;
+        case "note":      return Theme.iconNote;
+        default:          return Theme.iconMagnifyingGlass;
         }
     }
 
@@ -315,11 +318,10 @@ Rectangle {
 
                 Text {
                     anchors.verticalCenter: parent.verticalCenter
-                    text: "❯"
+                    text: Theme.iconMagnifyingGlass
                     color: Theme.primary
-                    font.family: Theme.fontMono
+                    font.family:    Theme.fontIcon
                     font.pixelSize: Theme.typeTitle
-                    font.weight: Theme.typeTitleWeight
                 }
 
                 TextInput {

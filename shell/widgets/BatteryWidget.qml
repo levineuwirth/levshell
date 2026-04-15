@@ -30,12 +30,18 @@ WidgetWrapper {
         return root.contentColor;
     }
 
+    // Phosphor battery icons — six-level granularity per §8.
+    // Charging shows the lightning-bolt overlay icon regardless of
+    // current percent (matches the user's mental model of "it's
+    // charging, not draining").
     readonly property string icon: {
-        if (charging) return "⚡";
-        if (full)      return "▰";
-        if (percent > 66) return "▰";
-        if (percent > 33) return "▱";
-        return "▱";
+        if (charging)     return Theme.iconBatteryCharging;
+        if (full)         return Theme.iconBatteryFull;
+        if (percent >= 90) return Theme.iconBatteryFull;
+        if (percent >= 70) return Theme.iconBatteryHigh;
+        if (percent >= 40) return Theme.iconBatteryMedium;
+        if (percent >= 15) return Theme.iconBatteryLow;
+        return Theme.iconBatteryEmpty;
     }
 
     readonly property string formattedTime: {
@@ -54,6 +60,7 @@ WidgetWrapper {
             anchors.verticalCenter: parent.verticalCenter
             text: root.icon
             color: root.batteryColor
+            font.family:    Theme.fontIcon
             font.pixelSize: Theme.iconSizeFull
         }
 

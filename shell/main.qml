@@ -42,6 +42,19 @@ Scope {
     id: shell
 
     // ----------------------------------------------------------------------
+    // Phosphor Icons font (§8). The family name "Phosphor" set in
+    // Theme.fontIcon resolves to this bundled TTF. Widgets and the
+    // palette reference `Theme.icon*` PUA codepoints with
+    // `font.family: Theme.fontIcon` to render outlined icons at any
+    // size. The FontLoader is owned by the top-level Scope so it
+    // stays alive for the entire shell lifetime.
+    // ----------------------------------------------------------------------
+    FontLoader {
+        id: phosphorFont
+        source: "fonts/Phosphor.ttf"
+    }
+
+    // ----------------------------------------------------------------------
     // Reactive state stores.
     // ----------------------------------------------------------------------
     // Using plain objects so that re-assignment through Object.assign

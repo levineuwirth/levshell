@@ -86,9 +86,11 @@ QtObject {
     // =================================================================
     readonly property string fontText: "Spectral"
     readonly property string fontMono: "IBM Plex Mono"
-    // Phosphor Icons — requires ttf-phosphor-icons installed, or a
-    // bundled .ttf in shell/fonts/. Phase 1.6 falls back to Unicode
-    // glyphs when the font is missing.
+    // Phosphor Icons — bundled at `shell/fonts/Phosphor.ttf` and
+    // loaded via FontLoader in main.qml. The family name "Phosphor"
+    // resolves to the loaded TTF once the FontLoader status reaches
+    // Ready; widgets and the palette render glyphs via the
+    // `icon*` private-use-area string tokens below.
     readonly property string fontIcon: "Phosphor"
 
     // Type scale (1.2× minor-third, anchored at 13px body). Each entry
@@ -202,13 +204,49 @@ QtObject {
     readonly property int widthExpanded: 220
 
     // =================================================================
-    // STATUS INDICATOR ICON (§7.3, top-right corner)
+    // ICONOGRAPHY — §8 Phosphor Icons private-use-area codepoints
     //
-    // Unicode placeholders until Phosphor Icons are bundled. The spec
-    // calls for a small clock for Stale and a warning-triangle for
-    // Error, rendered at 10px.
+    // Each token holds a single PUA codepoint into the bundled
+    // Phosphor.ttf. Widgets render these via
+    //     font.family: Theme.fontIcon
+    //     text: Theme.iconFoo
+    // rather than hardcoding the escape sequence. The mapping follows
+    // the `ph-<name>` CSS class names from phosphor-icons/web; the
+    // comments next to each token name the Phosphor icon used.
+    //
+    // §7.3 Status indicator (top-right corner) uses `iconClockCountdown`
+    // for Stale and `iconWarning` for Error, rendered at `statusIconSize`.
     // =================================================================
-    readonly property string statusIconStale: "◷"
-    readonly property string statusIconError: "⚠"
+    readonly property string iconClockCountdown:  "\uED2C"  // ph-clock-countdown
+    readonly property string iconWarning:         "\uE4E0"  // ph-warning
+    readonly property string iconMemory:          "\uE9C4"  // ph-memory
+    readonly property string iconCpu:             "\uE610"  // ph-cpu
+    readonly property string iconBell:            "\uE0CE"  // ph-bell (notifications)
+    readonly property string iconAppWindow:       "\uE5DA"  // ph-app-window (app hint)
+    readonly property string iconSquaresFour:     "\uE464"  // ph-squares-four (workspace hint)
+    readonly property string iconNote:            "\uE348"  // ph-note (note hint)
+    readonly property string iconMagnifyingGlass: "\uE30C"  // ph-magnifying-glass (search)
+
+    // Battery — six levels plus charging. BatteryWidget picks via
+    // percent buckets: full≥90, high≥70, medium≥40, low≥15, else empty.
+    readonly property string iconBatteryFull:     "\uE0C0"  // ph-battery-full
+    readonly property string iconBatteryHigh:     "\uE0C2"  // ph-battery-high
+    readonly property string iconBatteryMedium:   "\uE0C6"  // ph-battery-medium
+    readonly property string iconBatteryLow:      "\uE0C4"  // ph-battery-low
+    readonly property string iconBatteryEmpty:    "\uE0BE"  // ph-battery-empty
+    readonly property string iconBatteryCharging: "\uE0BC"  // ph-battery-charging-vertical
+
+    // Network — wifi signal tiers plus a wired / fallback indicator.
+    // NetworkWidget picks via: !primary → slash, has wifi quality →
+    // high/medium/low by percent, wired or metadata-free → network.
+    readonly property string iconWifiHigh:        "\uE4EA"  // ph-wifi-high
+    readonly property string iconWifiMedium:      "\uE4EE"  // ph-wifi-medium
+    readonly property string iconWifiLow:         "\uE4EC"  // ph-wifi-low
+    readonly property string iconWifiSlash:       "\uE4F2"  // ph-wifi-slash (no connection)
+    readonly property string iconNetwork:         "\uEDDE"  // ph-network (wired / generic)
+
+    // Status indicator icon aliases (referenced by WidgetWrapper).
+    readonly property string statusIconStale: iconClockCountdown
+    readonly property string statusIconError: iconWarning
     readonly property int    statusIconSize:  10
 }

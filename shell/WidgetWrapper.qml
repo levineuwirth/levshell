@@ -164,8 +164,9 @@ Item {
     // -----------------------------------------------------------------
     // Status indicator icon — §7.3 channel 3
     //
-    // Small glyph in the top-right corner. Unicode placeholders until
-    // Phosphor Icons are bundled (see Theme.fontIcon).
+    // Small Phosphor glyph in the top-right corner. Rendered via the
+    // bundled Phosphor font (`Theme.fontIcon`) at the spec's 10px
+    // `statusIconSize`.
     // -----------------------------------------------------------------
     Text {
         id: statusIcon
@@ -178,6 +179,7 @@ Item {
             : root.status === "error" ? Theme.statusIconError
             : ""
         color: root.status === "stale" ? Theme.stalePill : Theme.errorPill
+        font.family:    Theme.fontIcon
         font.pixelSize: Theme.statusIconSize
     }
 }

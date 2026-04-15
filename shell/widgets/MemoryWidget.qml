@@ -34,8 +34,9 @@ WidgetWrapper {
 
         Text {
             anchors.verticalCenter: parent.verticalCenter
-            text: "▤"
+            text: Theme.iconMemory
             color: root.usageColor
+            font.family:    Theme.fontIcon
             font.pixelSize: Theme.iconSizeFull
         }
 

@@ -30,8 +30,9 @@ WidgetWrapper {
 
         Text {
             anchors.verticalCenter: parent.verticalCenter
-            text: "⚙"
+            text: Theme.iconCpu
             color: root.usageColor
+            font.family:    Theme.fontIcon
             font.pixelSize: Theme.iconSizeFull
         }
 
