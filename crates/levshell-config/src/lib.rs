@@ -1,8 +1,19 @@
 //! Levshell configuration loader.
 //!
-//! Loads layered TOML configuration from `~/.config/levshell/` (global theme,
-//! per-module settings, sync adapter configs, project declarations, profiles,
-//! rules, and themes). Watches the directory tree via inotify so config edits
-//! take effect without a daemon restart.
+//! Loads layered TOML configuration from `~/.config/levshell/`. Phase 1.2
+//! ships only the **profile loader**: every `*.toml` file under
+//! `profiles/` is parsed into a [`levshell_context::Profile`]. Later phases
+//! will extend this crate to cover module settings, rules, themes, and
+//! inotify-based hot reload.
+//!
+//! The loader is intentionally forgiving: a malformed profile file logs a
+//! warning and is skipped rather than failing the whole load. The daemon
+//! starts with whatever profiles parsed successfully.
 
 #![forbid(unsafe_code)]
+
+pub mod profiles;
+
+pub use profiles::{
+    default_profiles_dir, load_profile_file, load_profiles_from_dir, ConfigError, ProfileFile,
+};

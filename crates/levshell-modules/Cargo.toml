@@ -12,6 +12,7 @@ description = "Built-in Levshell modules: workspace indicator, telemetry, notifi
 levshell-core.workspace = true
 levshell-data.workspace = true
 levshell-config.workspace = true
+levshell-context.workspace = true
 levshell-ipc.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -24,3 +25,4 @@ tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+tempfile = "3"

@@ -9,10 +9,7 @@ repository.workspace = true
 description = "Levshell context engine: input signals, resolution layers, relevance rules, hysteresis."
 
 [dependencies]
-levshell-core.workspace = true
-levshell-data.workspace = true
-levshell-config.workspace = true
+levshell-ipc.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-tokio = { workspace = true, features = ["rt", "sync", "time"] }
