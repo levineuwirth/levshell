@@ -4,7 +4,7 @@
 //! There is exactly one writer task per IPC connection. Modules never touch
 //! the [`IpcWriter`] directly; instead they hold a `WidgetPublisher` (an
 //! `mpsc::Sender<DaemonMessage>`) and the writer task drains the matching
-//! receiver in a loop, encoding each message and writing one length-prefixed
+//! receiver in a loop, encoding each message and writing one newline-delimited
 //! frame to the socket. This avoids contention on the writer half and gives
 //! the daemon a single place to react when the connection drops.
 
@@ -70,7 +70,7 @@ pub struct WriterTask {
 
 /// Spawn a background task that owns the [`IpcWriter`], drains
 /// [`DaemonMessage`]s from a bounded channel, and writes each as a
-/// length-prefixed frame. Returns a [`WidgetPublisher`] handle, the task
+/// newline-delimited frame. Returns a [`WidgetPublisher`] handle, the task
 /// join handle, and a oneshot that fires when the loop exits.
 ///
 /// The default writer half is `BufWriter<OwnedWriteHalf>`, but the helper is

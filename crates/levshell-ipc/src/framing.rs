@@ -1,44 +1,48 @@
-//! Length-prefixed framing helpers for the Unix-socket transport.
+//! Newline-delimited framing for the Unix-socket transport.
 //!
-//! Frames are `4-byte big-endian u32 length || payload`. The reader refuses
-//! to allocate any frame larger than [`MAX_FRAME_SIZE`] so a corrupt or
-//! malicious peer cannot OOM the daemon by lying about a payload's size.
+//! Each frame is a codec-encoded payload followed by a single `\n` byte.
+//! With [`JsonCodec`](crate::codec::JsonCodec) this produces NDJSON, which
+//! the QuickShell `SplitParser` can consume directly. A cap of
+//! [`MAX_FRAME_SIZE`] is enforced on both sides so a corrupt or runaway
+//! peer cannot OOM the daemon by sending an unbounded line.
 //!
-//! These helpers are deliberately small and codec-agnostic — every IPC call
-//! site funnels through them, so any future tweak (compression, framing
-//! version negotiation) only has to land in one place.
+//! Why a newline delimiter: Quickshell 0.2 exposes socket reads through
+//! `DataStreamParser` subclasses, and the only general-purpose parser is
+//! [`SplitParser`] which splits on a string marker. `\n` is a safe choice
+//! for JSON because the grammar forbids unescaped newlines inside strings
+//! and compact serde_json never emits them.
 
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::error::{IpcError, Result, MAX_FRAME_SIZE};
 
+pub(crate) const FRAME_DELIMITER: u8 = b'\n';
+
 pub(crate) async fn read_frame<R>(reader: &mut R) -> Result<Vec<u8>>
 where
-    R: AsyncRead + Unpin,
+    R: AsyncBufRead + Unpin,
 {
-    let mut len_buf = [0u8; 4];
-    match reader.read_exact(&mut len_buf).await {
-        Ok(_) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-            return Err(IpcError::ConnectionClosed);
-        }
-        Err(e) => return Err(IpcError::Io(e)),
+    // Read at most MAX_FRAME_SIZE + 1 bytes — one past the cap so we can
+    // distinguish "frame exactly at the cap" from "peer is sending garbage
+    // that never terminates."
+    let limit = (MAX_FRAME_SIZE as u64) + 1;
+    let mut limited = reader.take(limit);
+    let mut buf = Vec::new();
+    let n = limited.read_until(FRAME_DELIMITER, &mut buf).await?;
+    if n == 0 {
+        return Err(IpcError::ConnectionClosed);
     }
-    let len = u32::from_be_bytes(len_buf) as usize;
-    if len > MAX_FRAME_SIZE {
-        return Err(IpcError::FrameTooLarge {
-            size: len,
+    if buf.last() == Some(&FRAME_DELIMITER) {
+        buf.pop();
+        return Ok(buf);
+    }
+    if buf.len() > MAX_FRAME_SIZE {
+        Err(IpcError::FrameTooLarge {
+            size: buf.len(),
             max: MAX_FRAME_SIZE,
-        });
-    }
-
-    let mut buf = vec![0u8; len];
-    match reader.read_exact(&mut buf).await {
-        Ok(_) => Ok(buf),
-        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-            Err(IpcError::ConnectionClosed)
-        }
-        Err(e) => Err(IpcError::Io(e)),
+        })
+    } else {
+        Err(IpcError::ConnectionClosed)
     }
 }
 
@@ -52,9 +56,13 @@ where
             max: MAX_FRAME_SIZE,
         });
     }
-    let len = (bytes.len() as u32).to_be_bytes();
-    writer.write_all(&len).await?;
+    if bytes.contains(&FRAME_DELIMITER) {
+        return Err(IpcError::Codec(
+            "encoded message contains a raw newline — codec must emit compact output".into(),
+        ));
+    }
     writer.write_all(bytes).await?;
+    writer.write_all(&[FRAME_DELIMITER]).await?;
     writer.flush().await?;
     Ok(())
 }

@@ -50,10 +50,17 @@ pub struct WidgetVisibility {
     pub prominence: Prominence,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Widget prominence levels in strict total order:
+/// `Hidden` < `Badge` < `IconOnly` < `Compact` < `Visible` < `Expanded`.
+///
+/// `Badge` renders as a 6px colored dot and communicates minimal presence
+/// ("there are unread items", "a connection exists") without consuming
+/// meaningful bar space. It sits between full invisibility and icon-only.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Prominence {
     Hidden,
+    Badge,
     IconOnly,
     Compact,
     Visible,
@@ -81,6 +88,10 @@ pub enum ShellMessage {
     WidgetAction(WidgetAction),
     CommandPaletteQuery(CommandPaletteQuery),
     CommandPaletteSelect(CommandPaletteSelect),
+    /// The shell asks the daemon to close an open command palette. Sent
+    /// when the user hits Escape or clicks outside the palette. Carries
+    /// no payload — close is idempotent.
+    CommandPaletteClose,
     DensityChange(DensityChange),
 }
 

@@ -10,6 +10,18 @@ use serde::{de::DeserializeOwned, Serialize};
 
 use crate::error::{IpcError, Result};
 
+/// # Invariant: encoded output must not contain `0x0a` (newline).
+///
+/// The transport in `framing.rs` is newline-delimited, so any codec plugged
+/// in here must guarantee its `encode` output is free of raw `\n` bytes —
+/// otherwise a single message would be split across multiple frames on the
+/// shell side. `JsonCodec` satisfies this trivially (compact serde_json
+/// escapes newlines inside strings as `\n` and never emits them between
+/// tokens). A future MessagePack or FlatBuffers codec would need base64,
+/// hex, or a different framing layer to preserve the invariant.
+///
+/// `write_frame` enforces the check at runtime as a defensive backstop, but
+/// a correct codec should never hit it.
 pub trait Codec: Send + Sync + 'static {
     fn encode<M>(&self, msg: &M) -> Result<Vec<u8>>
     where

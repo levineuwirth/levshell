@@ -9,6 +9,7 @@ members = [
     "crates/levshell-config",
     "crates/levshell-modules",
     "crates/levshell-daemon",
+    "crates/levshell-ctl",
 ]
 
 [workspace.package]

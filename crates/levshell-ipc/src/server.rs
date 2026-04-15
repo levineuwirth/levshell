@@ -14,7 +14,7 @@
 use std::path::{Path, PathBuf};
 
 use serde::{de::DeserializeOwned, Serialize};
-use tokio::io::{AsyncRead, AsyncWrite, BufReader, BufWriter};
+use tokio::io::{AsyncBufRead, AsyncWrite, BufReader, BufWriter};
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{UnixListener, UnixStream};
 
@@ -142,7 +142,7 @@ impl<C: Codec + Clone> IpcConnection<C> {
     }
 }
 
-/// Read half: drains length-prefixed frames from the socket and decodes
+/// Read half: drains newline-delimited frames from the socket and decodes
 /// them via the connection's codec.
 pub struct IpcReader<C = JsonCodec, R = BufReader<OwnedReadHalf>> {
     inner: R,
@@ -152,7 +152,7 @@ pub struct IpcReader<C = JsonCodec, R = BufReader<OwnedReadHalf>> {
 impl<C, R> IpcReader<C, R>
 where
     C: Codec,
-    R: AsyncRead + Unpin,
+    R: AsyncBufRead + Unpin,
 {
     pub async fn recv<M>(&mut self) -> Result<M>
     where
@@ -164,7 +164,7 @@ where
 }
 
 /// Write half: encodes a message via the connection's codec and writes a
-/// length-prefixed frame.
+/// newline-delimited frame.
 pub struct IpcWriter<C = JsonCodec, W = BufWriter<OwnedWriteHalf>> {
     inner: W,
     codec: C,
@@ -175,6 +175,14 @@ where
     C: Codec,
     W: AsyncWrite + Unpin,
 {
+    /// Build an `IpcWriter` from an existing async writer and codec. The
+    /// production path constructs writers via [`IpcConnection`], so this is
+    /// primarily useful for tests that want to spawn a writer task against
+    /// a duplex pipe or in-memory sink.
+    pub fn from_parts(inner: W, codec: C) -> Self {
+        Self { inner, codec }
+    }
+
     pub async fn send<M>(&mut self, msg: &M) -> Result<()>
     where
         M: Serialize + ?Sized,

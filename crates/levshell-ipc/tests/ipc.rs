@@ -169,6 +169,66 @@ async fn closed_peer_returns_connection_closed() {
 }
 
 #[tokio::test]
+async fn wire_format_is_newline_delimited() {
+    // Sanity-check the NDJSON contract end-to-end: one message per line, no
+    // embedded newlines inside a frame. If this breaks, the QML SplitParser
+    // on the shell side will desync.
+    use tokio::io::AsyncReadExt;
+
+    let (_dir, path) = temp_socket_path();
+    let server = IpcServer::bind(&path).unwrap();
+    let accept_fut = server.accept();
+    let connect_fut = UnixStream::connect(&path);
+    let (server_conn, mut shell_stream) = tokio::join!(accept_fut, connect_fut);
+    let mut server_conn = server_conn.unwrap();
+    let shell_stream_ref = shell_stream.as_mut().unwrap();
+
+    let msg_a = DaemonMessage::WidgetUpdate(WidgetUpdate {
+        widget_id: "a".into(),
+        widget_type: "t".into(),
+        state: json!({ "n": 1 }),
+        status: WidgetStatus::Normal,
+    });
+    let msg_b = DaemonMessage::WidgetUpdate(WidgetUpdate {
+        widget_id: "b".into(),
+        widget_type: "t".into(),
+        state: json!({ "n": 2 }),
+        status: WidgetStatus::Normal,
+    });
+    server_conn.writer().send(&msg_a).await.unwrap();
+    server_conn.writer().send(&msg_b).await.unwrap();
+
+    // Read raw bytes and assert we see exactly two `\n`-terminated JSON objects
+    // with no embedded newlines.
+    let mut raw = vec![0u8; 4096];
+    let n = tokio::time::timeout(
+        Duration::from_millis(200),
+        shell_stream_ref.read(&mut raw),
+    )
+    .await
+    .expect("read within 200ms")
+    .unwrap();
+    raw.truncate(n);
+
+    let newlines: Vec<usize> = raw
+        .iter()
+        .enumerate()
+        .filter_map(|(i, b)| if *b == b'\n' { Some(i) } else { None })
+        .collect();
+    assert_eq!(newlines.len(), 2, "expected exactly two frame delimiters");
+
+    let line_a = &raw[..newlines[0]];
+    let line_b = &raw[newlines[0] + 1..newlines[1]];
+    assert!(!line_a.contains(&b'\n'));
+    assert!(!line_b.contains(&b'\n'));
+
+    let parsed_a: DaemonMessage = serde_json::from_slice(line_a).unwrap();
+    let parsed_b: DaemonMessage = serde_json::from_slice(line_b).unwrap();
+    assert_eq!(parsed_a, msg_a);
+    assert_eq!(parsed_b, msg_b);
+}
+
+#[tokio::test]
 async fn json_wire_format_uses_type_discriminator() {
     use levshell_ipc::Codec;
     let codec = JsonCodec;

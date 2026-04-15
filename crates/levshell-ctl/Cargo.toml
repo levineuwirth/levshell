@@ -1,0 +1,20 @@
+[package]
+name = "levshell-ctl"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Command-line control interface for the Levshell daemon. Connects to the daemon's Unix socket, sends a single command, prints the response, and exits."
+
+[[bin]]
+name = "levshell-ctl"
+path = "src/main.rs"
+
+[dependencies]
+levshell-ipc.workspace = true
+
+tokio = { workspace = true, features = ["rt", "macros", "net", "io-util"] }
+anyhow.workspace = true
+clap = { version = "4", features = ["derive"] }
