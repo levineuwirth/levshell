@@ -153,6 +153,77 @@ Rectangle {
         autoPaddingEnabled:   true
     }
 
+    // =================================================================
+    // OPEN/CLOSE ANIMATION (spec §12.1)
+    //
+    // Instead of flipping visibility instantly, the palette fades its
+    // opacity at `motion.fast` (120ms) and springs a subtle scale
+    // from 0.96 → 1.0 on open / 1.0 → 0.96 on close. Open uses
+    // `spring.default` (a softer settle), close uses `spring.snappy`
+    // (faster, per §6.3 "closes feel snappier than opens").
+    //
+    // Default opacity=0 + scale=0.96 so the first frame after the
+    // PanelWindow becomes visible is the real "closed" state — the
+    // "" → "open" transition then actually animates, instead of
+    // snapping to the open values.
+    //
+    // `main.qml` retains the containing PanelWindow's visibility
+    // through the fade via a short Timer so the animation can finish
+    // before the window is hidden.
+    // =================================================================
+    readonly property bool isOpen: paletteData && paletteData.open === true
+
+    opacity: 0.0
+    scale: 0.96
+    // Scale around the top edge so the palette grows downward from
+    // the bar on open / collapses toward the bar on close, rather
+    // than expanding symmetrically from its center (which would look
+    // like a vertical jitter at this anchor).
+    transformOrigin: Item.Top
+
+    states: [
+        State {
+            name: "open"
+            when: root.isOpen
+            PropertyChanges { target: root; opacity: 1.0; scale: 1.0 }
+        }
+    ]
+
+    transitions: [
+        Transition {
+            from: ""; to: "open"
+            ParallelAnimation {
+                NumberAnimation {
+                    property: "opacity"
+                    duration: Theme.motionFast
+                }
+                SpringAnimation {
+                    property: "scale"
+                    spring:  Theme.springDefault
+                    damping: Theme.springDefaultDamping
+                    mass:    Theme.springMass
+                    epsilon: 0.005
+                }
+            }
+        },
+        Transition {
+            from: "open"; to: ""
+            ParallelAnimation {
+                NumberAnimation {
+                    property: "opacity"
+                    duration: Theme.motionFast
+                }
+                SpringAnimation {
+                    property: "scale"
+                    spring:  Theme.springSnappy
+                    damping: Theme.springSnappyDamping
+                    mass:    Theme.springMass
+                    epsilon: 0.005
+                }
+            }
+        }
+    ]
+
     // Height animates with a critically-damped spring — the palette's
     // card is anchored vertically below the bar, and overshoot on a
     // vertically anchored element reads as jitter per §6.3.

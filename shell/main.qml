@@ -293,7 +293,36 @@ Scope {
     // ----------------------------------------------------------------------
     PanelWindow {
         id: paletteWindow
-        visible: shell.paletteState.open === true
+
+        // Retain visibility through the close fade so the inner
+        // CommandPalette Rectangle can animate its opacity/scale
+        // to zero before the PanelWindow is hidden. `closeTimer`
+        // fires after the opacity fade + spring settle window
+        // and flips `isClosing` back to false, dropping the
+        // window off the layer.
+        property bool isClosing: false
+        visible: shell.paletteState.open === true || isClosing
+
+        Connections {
+            target: shell
+            function onPaletteStateChanged() {
+                if (shell.paletteState.open) {
+                    paletteWindow.isClosing = false;
+                    closeTimer.stop();
+                } else if (paletteWindow.visible && !paletteWindow.isClosing) {
+                    paletteWindow.isClosing = true;
+                    closeTimer.restart();
+                }
+            }
+        }
+
+        Timer {
+            id: closeTimer
+            // motionFast fade + spring settle (~350ms) + a small
+            // safety margin so we never clip the animation tail.
+            interval: Theme.motionSlow + 50
+            onTriggered: paletteWindow.isClosing = false
+        }
 
         WlrLayershell.layer: WlrLayer.Overlay
         WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
