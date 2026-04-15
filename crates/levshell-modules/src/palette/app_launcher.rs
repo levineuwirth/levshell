@@ -1,21 +1,23 @@
 //! App launcher provider.
 //!
 //! Scans well-known XDG application directories for `.desktop` files,
-//! parses a minimal subset of the Desktop Entry Specification, and matches
-//! user queries against `Name` and `Exec`. Selected items are spawned as
+//! parses a minimal subset of the Desktop Entry Specification, matches
+//! user queries against `Name` and `Exec`, and resolves each entry's
+//! `Icon=` value to an absolute filesystem path via the freedesktop
+//! icon-theme inheritance chain. Selected items are spawned as
 //! detached child processes.
 //!
-//! Phase 1.5 intentionally ignores:
+//! Ignored at parse time:
 //! * `Categories`, `Keywords`, `GenericName`
-//! * `Icon` (we emit a static glyph instead)
 //! * Localized names (`Name[en_US]=…`)
 //! * Terminal applications (`Terminal=true`)
 //! * Actions (`Actions=…`)
 //!
-//! The parser is ~40 lines and correct for the 95% of entries that just
-//! set `[Desktop Entry]`, `Name`, `Exec`, and optionally
-//! `Comment`/`NoDisplay`/`Hidden`. Anything exotic falls through to
-//! "treat as regular app".
+//! Icon resolution (see [`IconResolver`]) walks the user's configured
+//! GTK icon theme plus its `Inherits=` ancestors, terminating at the
+//! always-present `hicolor` fallback. Resolution happens once per
+//! entry at scan time and is cached on [`DesktopEntry::icon_path`],
+//! so the live query path stays filesystem-free.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -203,25 +205,80 @@ pub fn scan_desktop_entries(dirs: &[PathBuf]) -> Vec<DesktopEntry> {
 // Icon theme resolver
 // =====================================================================
 
-/// Hicolor icon-theme size subdirectories we search, in descending
-/// preference order. Bigger sources downscale to 24px better than
-/// blurrier smaller ones.
-const HICOLOR_SIZES: &[&str] = &[
-    "scalable", // vector SVG, always first
-    "512x512",
-    "256x256",
-    "128x128",
-    "64x64",
-    "48x48",
-    "32x32",
-];
-
-/// Icon file extensions we try, in order. SVG first so vector icons
-/// beat rasterized siblings.
+/// Extensions tried when walking the legacy `<root>/pixmaps`
+/// directory. Themed subdirectories use a smaller modern list
+/// (see [`extensions_for_subdir`]); this one keeps `xpm` for old
+/// packages that still ship it there.
 const ICON_EXTS: &[&str] = &["svg", "png", "xpm"];
 
+/// Size subdirectory names for the hicolor/Adwaita/Papirus layout
+/// (`<size>/<context>/`), ordered from best (vector) to acceptable
+/// (small raster). `@2x` variants appear alongside their base size
+/// for hiDPI systems.
+const THEME_SIZES: &[&str] = &[
+    "scalable",
+    "512x512",
+    "512x512@2x",
+    "256x256",
+    "256x256@2x",
+    "128x128",
+    "128x128@2x",
+    "96x96",
+    "96x96@2x",
+    "64x64",
+    "64x64@2x",
+    "48x48",
+    "48x48@2x",
+    "40x40",
+    "32x32",
+    "32x32@2x",
+    "24x24",
+    "24x24@2x",
+    "22x22",
+    "22x22@2x",
+    "16x16",
+    "16x16@2x",
+];
+
+/// Size subdirectory names for the Breeze layout
+/// (`<context>/<size>/`).  KDE themes use short size names without
+/// the `NxN` format.
+const THEME_SIZES_BREEZE: &[&str] = &[
+    "scalable", "512", "256", "128", "96", "64", "48", "32", "24", "24@2x", "22",
+    "22@2x", "16", "16@2x",
+];
+
+/// Icon contexts in preference order. `apps` always wins, then the
+/// freedesktop named-icon contexts for system/category/device icons
+/// (which `.desktop` files commonly reference for utility apps —
+/// e.g. `Icon=network-wired` in an Avahi browser).
+const THEME_CONTEXTS: &[&str] = &["apps", "status", "categories", "devices"];
+
+/// Build the ordered list of candidate `<theme>/<subdir>` paths to
+/// walk. Apps come first across every size, then other contexts,
+/// then the monochromatic symbolic fallback. Both hicolor and Breeze
+/// layouts are generated for each context. Computed once per
+/// [`IconResolver`] at construction.
+fn candidate_subdirs() -> Vec<String> {
+    let mut out: Vec<String> = Vec::with_capacity(THEME_CONTEXTS.len() * (THEME_SIZES.len() + THEME_SIZES_BREEZE.len()) + 8);
+    for context in THEME_CONTEXTS {
+        for size in THEME_SIZES {
+            out.push(format!("{size}/{context}"));
+        }
+        for size in THEME_SIZES_BREEZE {
+            out.push(format!("{context}/{size}"));
+        }
+    }
+    // Monochromatic fallback across every context, last resort.
+    for context in THEME_CONTEXTS {
+        out.push(format!("symbolic/{context}"));
+        out.push(format!("{context}/symbolic"));
+    }
+    out
+}
+
 /// Base directories to search for icon themes. Each root is expected
-/// to contain `pixmaps/` and/or `icons/hicolor/...` subdirectories.
+/// to contain `pixmaps/` and/or `icons/<theme>/...` subdirectories.
 ///
 /// Pulls from `$XDG_DATA_HOME` (or `$HOME/.local/share`) first so
 /// user-installed icons beat system ones, then `$XDG_DATA_DIRS`, with
@@ -245,70 +302,369 @@ pub fn default_icon_search_roots() -> Vec<PathBuf> {
     roots
 }
 
-/// Resolve an `Icon=` value to an absolute filesystem path, walking
-/// the freedesktop icon theme search path. Phase 1.6 implements a
-/// minimal resolver that checks only the **hicolor** theme (every
-/// theme's ultimate fallback per spec) plus the legacy `/usr/share/pixmaps`
-/// directory. Per-theme lookups (Papirus, Adwaita, Breeze, …) are a
-/// future extension.
-///
-/// Resolution order:
-///
-///   1. If `icon_name` is absolute and the file exists, return it as-is.
-///   2. For each `search_root` (in the order from `default_icon_search_roots`):
-///      a. `<root>/pixmaps/<name>.{svg,png,xpm}`
-///      b. `<root>/icons/hicolor/scalable/apps/<name>.svg`
-///      c. `<root>/icons/hicolor/{512,256,128,64,48,32}x.../apps/<name>.png`
-///   3. Return `None` if nothing matches.
-///
-/// This is called **once per entry at scan time** ([`AppLauncherProvider::new`])
-/// and the resolved paths are cached on the `DesktopEntry`, so the live
-/// query path never touches the filesystem.
-pub fn resolve_icon(icon_name: &str, search_roots: &[PathBuf]) -> Option<PathBuf> {
-    if icon_name.is_empty() {
+/// Parse the `Inherits=` field out of a freedesktop icon-theme
+/// `index.theme`. Returns an empty vec if the file is missing,
+/// unreadable, or doesn't declare inheritance.
+fn parse_theme_inherits(index_theme_path: &Path) -> Vec<String> {
+    let Ok(text) = std::fs::read_to_string(index_theme_path) else {
+        return Vec::new();
+    };
+    let mut in_header = false;
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if line.starts_with('[') {
+            in_header = line == "[Icon Theme]";
+            continue;
+        }
+        if !in_header {
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("Inherits=") {
+            return value
+                .split(',')
+                .map(|s| s.trim().to_owned())
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
+    }
+    Vec::new()
+}
+
+/// Read the icon theme name out of a GTK `settings.ini` file. Returns
+/// `None` if the file is missing, has no `[Settings]` section, or
+/// doesn't set `gtk-icon-theme-name`.
+fn read_icon_theme_from_settings(path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let mut in_settings = false;
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+            continue;
+        }
+        if line.starts_with('[') {
+            in_settings = line == "[Settings]";
+            continue;
+        }
+        if !in_settings {
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("gtk-icon-theme-name") {
+            let value = value.trim_start_matches(|c: char| c.is_whitespace() || c == '=');
+            let value = value.trim().trim_matches('"').trim_matches('\'');
+            if !value.is_empty() {
+                return Some(value.to_owned());
+            }
+        }
+    }
+    None
+}
+
+/// Detect the user's configured icon theme from GTK `settings.ini`
+/// files. Prefers GTK 4 (newer, what users actively configure), falls
+/// back to GTK 3. Returns `None` when neither file has a usable
+/// setting — callers should then fall back to hicolor only.
+pub fn detect_primary_icon_theme() -> Option<String> {
+    let base = if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+        PathBuf::from(xdg)
+    } else if let Some(home) = std::env::var_os("HOME") {
+        PathBuf::from(home).join(".config")
+    } else {
         return None;
+    };
+    for rel in &["gtk-4.0/settings.ini", "gtk-3.0/settings.ini"] {
+        if let Some(theme) = read_icon_theme_from_settings(&base.join(rel)) {
+            return Some(theme);
+        }
+    }
+    None
+}
+
+/// Build an ordered icon theme chain starting from `primary`, walking
+/// `Inherits=` transitively, and terminating with `hicolor`.
+///
+/// Loops are broken by a visited set — some themes mistakenly inherit
+/// each other, and we must not recurse forever. `hicolor` is always
+/// appended if not already present, since the freedesktop spec
+/// guarantees it as the universal fallback.
+pub fn build_theme_chain(search_roots: &[PathBuf], primary: Option<&str>) -> Vec<String> {
+    use std::collections::BTreeSet;
+    let mut chain: Vec<String> = Vec::new();
+    let mut visited: BTreeSet<String> = BTreeSet::new();
+    let mut stack: Vec<String> = Vec::new();
+
+    if let Some(p) = primary {
+        stack.push(p.to_owned());
     }
 
-    // Case 1: absolute path.
-    let raw = Path::new(icon_name);
-    if raw.is_absolute() {
-        return raw.exists().then(|| raw.to_path_buf());
+    while let Some(theme) = stack.pop() {
+        if !visited.insert(theme.clone()) {
+            continue;
+        }
+        chain.push(theme.clone());
+        for root in search_roots {
+            let index = root.join("icons").join(&theme).join("index.theme");
+            if index.exists() {
+                // Reverse so the first entry lands on top of the stack
+                // and is popped next — preserves the spec's "recurse in
+                // declared order" rule.
+                for inh in parse_theme_inherits(&index).into_iter().rev() {
+                    stack.push(inh);
+                }
+                break;
+            }
+        }
     }
 
-    // Case 2: theme / pixmaps lookup. If the caller passed a name with
-    // an extension already (`firefox.png`), strip it so we try our
-    // own extension order on the bare name.
-    let bare = raw
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or(icon_name);
+    if !visited.contains("hicolor") {
+        chain.push("hicolor".into());
+    }
+    chain
+}
 
-    for root in search_roots {
-        // 2a: legacy pixmaps directory.
-        let pixmaps = root.join("pixmaps");
-        for ext in ICON_EXTS {
-            let candidate = pixmaps.join(format!("{bare}.{ext}"));
-            if candidate.exists() {
-                return Some(candidate);
+/// Precomputed icon search state — build once at startup and reuse
+/// for every `.desktop` entry. Walks the freedesktop icon-theme
+/// inheritance chain from GTK settings and caches the per-theme
+/// application-context subdirectories that actually exist on disk,
+/// so the per-icon `resolve` call only stats files in known-live
+/// directories.
+pub struct IconResolver {
+    /// Existing `<root>/pixmaps` directories, searched before any
+    /// themed lookup (legacy path for `.desktop` files that still
+    /// carry bare pixmap names).
+    pixmaps_dirs: Vec<PathBuf>,
+    /// Existing `<root>/icons` directories, searched for icons
+    /// placed directly at the theme-roots level (e.g. a package
+    /// dropping `/usr/share/icons/xmaxima.png` instead of installing
+    /// into a proper theme subdirectory).
+    loose_icon_roots: Vec<PathBuf>,
+    /// `(theme_base, ordered_subdirs)` — one entry per live
+    /// `(theme, root)` combination, already sorted in theme-chain
+    /// order. Subdirs are filtered from [`candidate_subdirs`] to
+    /// only those that actually exist on disk.
+    theme_cache: Vec<(PathBuf, Vec<String>)>,
+}
+
+impl IconResolver {
+    /// Build a resolver from the default icon search roots and the
+    /// user's active GTK icon theme. Falls back to hicolor-only if
+    /// GTK settings are unreadable.
+    pub fn new() -> Self {
+        let search_roots = default_icon_search_roots();
+        let primary = detect_primary_icon_theme();
+        let theme_chain = build_theme_chain(&search_roots, primary.as_deref());
+        Self::from_parts(&search_roots, &theme_chain)
+    }
+
+    /// Build a resolver from explicit roots and theme chain. Used by
+    /// tests to avoid touching the real GTK config.
+    ///
+    /// `theme_chain` is used as-is except that `hicolor` is appended
+    /// if absent — the freedesktop spec makes it a universal fallback.
+    pub fn from_parts(search_roots: &[PathBuf], theme_chain: &[String]) -> Self {
+        let mut pixmaps_dirs = Vec::new();
+        let mut loose_icon_roots = Vec::new();
+        for root in search_roots {
+            let pixmaps = root.join("pixmaps");
+            if pixmaps.is_dir() {
+                pixmaps_dirs.push(pixmaps);
+            }
+            let icons = root.join("icons");
+            if icons.is_dir() {
+                loose_icon_roots.push(icons);
             }
         }
 
-        // 2b + 2c: hicolor theme, scalable first, then PNG size ladder.
-        let hicolor = root.join("icons").join("hicolor");
-        for size in HICOLOR_SIZES {
-            // Pick the extension appropriate for this size tier: SVG
-            // for scalable, PNG for bitmap sizes.
-            let exts: &[&str] = if *size == "scalable" { &["svg"] } else { &["png"] };
-            for ext in exts {
-                let candidate = hicolor.join(size).join("apps").join(format!("{bare}.{ext}"));
+        let candidates = candidate_subdirs();
+        let mut theme_cache = Vec::new();
+        let hicolor_needed = !theme_chain.iter().any(|t| t == "hicolor");
+        let effective_chain = theme_chain
+            .iter()
+            .map(String::as_str)
+            .chain(if hicolor_needed { Some("hicolor") } else { None });
+        for theme in effective_chain {
+            for root in search_roots {
+                let theme_base = root.join("icons").join(theme);
+                if !theme_base.is_dir() {
+                    continue;
+                }
+                let subdirs: Vec<String> = candidates
+                    .iter()
+                    .filter(|s| theme_base.join(s).is_dir())
+                    .cloned()
+                    .collect();
+                if !subdirs.is_empty() {
+                    theme_cache.push((theme_base, subdirs));
+                }
+            }
+        }
+
+        Self {
+            pixmaps_dirs,
+            loose_icon_roots,
+            theme_cache,
+        }
+    }
+
+    /// Resolve an `Icon=` value to an absolute filesystem path.
+    ///
+    /// Resolution tries multiple candidate names in order: the exact
+    /// input, then the reverse-DNS tail (`org.kde.dolphin` →
+    /// `dolphin`), then progressive dash-suffix strips per the
+    /// freedesktop spec (`gnome-web-browser` → `gnome-web` →
+    /// `gnome`). Each candidate is looked up as:
+    ///
+    /// 1. Absolute-path verbatim (only the original input — fallbacks
+    ///    are never treated as paths).
+    /// 2. Every cached `pixmaps/` directory with each extension.
+    /// 3. Every cached `(theme_base, subdirs)` entry in chain order,
+    ///    trying SVG for scalable/symbolic subdirs and PNG-then-SVG
+    ///    for bitmap ones.
+    ///
+    /// Returns `None` if no candidate matches anywhere.
+    pub fn resolve(&self, icon_name: &str) -> Option<PathBuf> {
+        if icon_name.is_empty() {
+            return None;
+        }
+
+        // Absolute paths are always returned verbatim — a `.desktop`
+        // file that ships `Icon=/opt/foo/bar.png` expects that exact
+        // path, not a fallback.
+        let raw = Path::new(icon_name);
+        if raw.is_absolute() {
+            return raw.exists().then(|| raw.to_path_buf());
+        }
+
+        for candidate in icon_name_fallbacks(icon_name) {
+            if let Some(found) = self.resolve_exact(&candidate) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    /// Look up a single icon name verbatim, without generating
+    /// fallback candidates. Called by [`Self::resolve`] for each name
+    /// in the fallback chain.
+    fn resolve_exact(&self, icon_name: &str) -> Option<PathBuf> {
+        // Some `.desktop` Icon= values carry an image extension
+        // (`firefox.png`) — strip it so we try our own preferred
+        // extension order. We only strip *known* image extensions;
+        // reverse-DNS names like `org.kde.dolphin` must NOT be
+        // treated as "stem=org.kde, ext=dolphin".
+        let bare = strip_known_extension(icon_name);
+
+        for pixmaps in &self.pixmaps_dirs {
+            for ext in ICON_EXTS {
+                let candidate = pixmaps.join(format!("{bare}.{ext}"));
                 if candidate.exists() {
                     return Some(candidate);
                 }
             }
         }
+
+        for loose in &self.loose_icon_roots {
+            for ext in ICON_EXTS {
+                let candidate = loose.join(format!("{bare}.{ext}"));
+                if candidate.exists() {
+                    return Some(candidate);
+                }
+            }
+        }
+
+        for (theme_base, subdirs) in &self.theme_cache {
+            for subdir in subdirs {
+                let dir = theme_base.join(subdir);
+                for ext in extensions_for_subdir(subdir) {
+                    let candidate = dir.join(format!("{bare}.{ext}"));
+                    if candidate.exists() {
+                        return Some(candidate);
+                    }
+                }
+            }
+        }
+
+        None
+    }
+}
+
+/// Strip a trailing known image extension (`.svg`, `.png`, `.xpm`)
+/// from an icon name, leaving everything else untouched. Required
+/// because reverse-DNS icon names like `org.kde.dolphin` must not be
+/// treated as `stem = "org.kde", ext = "dolphin"` by `Path::file_stem`.
+fn strip_known_extension(name: &str) -> &str {
+    for ext in &[".svg", ".png", ".xpm"] {
+        if let Some(stripped) = name.strip_suffix(ext) {
+            return stripped;
+        }
+    }
+    name
+}
+
+/// Generate candidate lookup names for an icon identifier, in order
+/// of specificity. The first candidate is always the unchanged input.
+///
+/// Fallbacks cover two common cases:
+///
+/// * **Reverse-DNS names** (`org.kde.dolphin`): modern `.desktop`
+///   files follow the AppStream convention of using a fully qualified
+///   reverse-DNS identifier as the icon name, but most themes still
+///   store icons under the short tail (`dolphin.svg`). We fall back
+///   on the substring after the last `.`.
+/// * **Dash-suffix stripping** (`gnome-web-browser` → `gnome-web` →
+///   `gnome`): defined by the freedesktop Icon Theme Specification
+///   as a standard fallback. Applied to both the original name and
+///   the reverse-DNS tail so both forms benefit.
+fn icon_name_fallbacks(icon_name: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::with_capacity(4);
+    out.push(icon_name.to_owned());
+
+    if let Some(idx) = icon_name.rfind('.') {
+        let tail = &icon_name[idx + 1..];
+        if !tail.is_empty() && !out.iter().any(|s| s == tail) {
+            out.push(tail.to_owned());
+        }
     }
 
-    None
+    // Dash-suffix strip, applied to both the full name and the
+    // reverse-DNS tail so `org.kde.dolphin-view` → `dolphin-view` →
+    // `dolphin` is reachable.
+    let bases: Vec<String> = out.clone();
+    for base in &bases {
+        let mut current = base.as_str();
+        while let Some(idx) = current.rfind('-') {
+            current = &current[..idx];
+            if !current.is_empty() && !out.iter().any(|s| s == current) {
+                out.push(current.to_owned());
+            }
+        }
+    }
+
+    out
+}
+
+impl Default for IconResolver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Pick the extensions to try for a given theme subdirectory.
+/// Scalable/symbolic tiers are SVG-only; everything else prefers PNG
+/// (the common case for raster themes) with SVG as a secondary
+/// fallback for mixed themes.
+fn extensions_for_subdir(subdir: &str) -> &'static [&'static str] {
+    if subdir.starts_with("scalable")
+        || subdir.contains("/scalable")
+        || subdir.starts_with("symbolic")
+        || subdir.contains("/symbolic")
+    {
+        &["svg"]
+    } else {
+        &["png", "svg"]
+    }
 }
 
 pub struct AppLauncherProvider {
@@ -322,10 +678,10 @@ impl AppLauncherProvider {
     /// cached icon paths let the live query path stay filesystem-free.
     pub fn new() -> Self {
         let mut entries = scan_desktop_entries(&default_search_paths());
-        let icon_roots = default_icon_search_roots();
+        let resolver = IconResolver::new();
         for entry in &mut entries {
             if let Some(name) = entry.icon_name.as_deref() {
-                entry.icon_path = resolve_icon(name, &icon_roots);
+                entry.icon_path = resolver.resolve(name);
             }
         }
         Self::from_entries(entries)
@@ -347,10 +703,10 @@ impl AppLauncherProvider {
     /// entry.
     pub fn rescan(&self) {
         let mut fresh = scan_desktop_entries(&default_search_paths());
-        let icon_roots = default_icon_search_roots();
+        let resolver = IconResolver::new();
         for entry in &mut fresh {
             if let Some(name) = entry.icon_name.as_deref() {
-                entry.icon_path = resolve_icon(name, &icon_roots);
+                entry.icon_path = resolver.resolve(name);
             }
         }
         let mut lock = self.entries.lock().expect("app-launcher mutex poisoned");
@@ -364,8 +720,10 @@ impl Default for AppLauncherProvider {
     }
 }
 
-/// Score an entry against a query. Returns `None` if the entry doesn't
-/// match at all.
+/// Score an entry against a query using the base match logic only —
+/// no recency boost. Returns `None` if the entry doesn't match at all.
+/// Kept as a free function for tests that want to verify the
+/// match-scoring tiers in isolation from launch history.
 fn score_entry(entry: &DesktopEntry, query: &str) -> Option<f64> {
     if query.is_empty() {
         return Some(0.4);
@@ -657,7 +1015,7 @@ Exec=firefox
         assert!(matches!(result, Err(ProviderError::UnknownItem(_))));
     }
 
-    // ----- resolve_icon tests -----
+    // ----- icon resolver tests -----
 
     fn write_file(path: &Path, contents: &[u8]) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -665,111 +1023,436 @@ Exec=firefox
     }
 
     #[test]
-    fn resolve_icon_absolute_path_returns_path_if_file_exists() {
+    fn resolver_absolute_path_returns_path_if_file_exists() {
         let dir = tempfile::tempdir().unwrap();
         let icon = dir.path().join("my-app.png");
         write_file(&icon, b"PNG");
-        let resolved = resolve_icon(icon.to_str().unwrap(), &[]);
-        assert_eq!(resolved, Some(icon));
+        let resolver = IconResolver::from_parts(&[], &[]);
+        assert_eq!(resolver.resolve(icon.to_str().unwrap()), Some(icon));
     }
 
     #[test]
-    fn resolve_icon_absolute_path_returns_none_if_missing() {
-        let resolved = resolve_icon("/nonexistent/path/to/icon.png", &[]);
-        assert!(resolved.is_none());
+    fn resolver_absolute_path_returns_none_if_missing() {
+        let resolver = IconResolver::from_parts(&[], &[]);
+        assert!(resolver.resolve("/nonexistent/path/to/icon.png").is_none());
     }
 
     #[test]
-    fn resolve_icon_empty_name_returns_none() {
-        let resolved = resolve_icon("", &[]);
-        assert!(resolved.is_none());
+    fn resolver_empty_name_returns_none() {
+        let resolver = IconResolver::from_parts(&[], &[]);
+        assert!(resolver.resolve("").is_none());
     }
 
     #[test]
-    fn resolve_icon_finds_svg_in_pixmaps() {
+    fn resolver_finds_svg_in_pixmaps() {
         let dir = tempfile::tempdir().unwrap();
         let svg = dir.path().join("pixmaps").join("firefox.svg");
         write_file(&svg, b"<svg/>");
-        let resolved = resolve_icon("firefox", &[dir.path().to_path_buf()]);
-        assert_eq!(resolved, Some(svg));
+        let resolver = IconResolver::from_parts(&[dir.path().to_path_buf()], &[]);
+        assert_eq!(resolver.resolve("firefox"), Some(svg));
     }
 
     #[test]
-    fn resolve_icon_finds_hicolor_scalable_svg() {
+    fn resolver_finds_hicolor_scalable_svg() {
         let dir = tempfile::tempdir().unwrap();
-        let svg = dir
-            .path()
-            .join("icons/hicolor/scalable/apps/firefox.svg");
+        let svg = dir.path().join("icons/hicolor/scalable/apps/firefox.svg");
         write_file(&svg, b"<svg/>");
-        let resolved = resolve_icon("firefox", &[dir.path().to_path_buf()]);
-        assert_eq!(resolved, Some(svg));
+        let resolver = IconResolver::from_parts(&[dir.path().to_path_buf()], &[]);
+        assert_eq!(resolver.resolve("firefox"), Some(svg));
     }
 
     #[test]
-    fn resolve_icon_prefers_pixmaps_over_hicolor() {
-        // pixmaps is checked before hicolor in the search order.
+    fn resolver_prefers_pixmaps_over_hicolor() {
         let dir = tempfile::tempdir().unwrap();
         let pixmaps_svg = dir.path().join("pixmaps").join("foo.svg");
-        let hicolor_svg = dir
-            .path()
-            .join("icons/hicolor/scalable/apps/foo.svg");
+        let hicolor_svg = dir.path().join("icons/hicolor/scalable/apps/foo.svg");
         write_file(&pixmaps_svg, b"<svg/>");
         write_file(&hicolor_svg, b"<svg/>");
-        let resolved = resolve_icon("foo", &[dir.path().to_path_buf()]);
-        assert_eq!(resolved, Some(pixmaps_svg));
+        let resolver = IconResolver::from_parts(&[dir.path().to_path_buf()], &[]);
+        assert_eq!(resolver.resolve("foo"), Some(pixmaps_svg));
     }
 
     #[test]
-    fn resolve_icon_prefers_scalable_over_48px_when_both_exist() {
+    fn resolver_prefers_scalable_over_48px_when_both_exist() {
         let dir = tempfile::tempdir().unwrap();
-        let scalable = dir
-            .path()
-            .join("icons/hicolor/scalable/apps/foo.svg");
+        let scalable = dir.path().join("icons/hicolor/scalable/apps/foo.svg");
         let fixed = dir.path().join("icons/hicolor/48x48/apps/foo.png");
         write_file(&scalable, b"<svg/>");
         write_file(&fixed, b"PNG");
-        let resolved = resolve_icon("foo", &[dir.path().to_path_buf()]);
-        assert_eq!(resolved, Some(scalable));
+        let resolver = IconResolver::from_parts(&[dir.path().to_path_buf()], &[]);
+        assert_eq!(resolver.resolve("foo"), Some(scalable));
     }
 
     #[test]
-    fn resolve_icon_falls_back_to_256_png_if_no_svg() {
+    fn resolver_falls_back_to_256_png_if_no_svg() {
         let dir = tempfile::tempdir().unwrap();
         let png = dir.path().join("icons/hicolor/256x256/apps/foo.png");
         write_file(&png, b"PNG");
-        let resolved = resolve_icon("foo", &[dir.path().to_path_buf()]);
-        assert_eq!(resolved, Some(png));
+        let resolver = IconResolver::from_parts(&[dir.path().to_path_buf()], &[]);
+        assert_eq!(resolver.resolve("foo"), Some(png));
     }
 
     #[test]
-    fn resolve_icon_strips_extension_from_name() {
-        // Passing "firefox.png" should still resolve to the bare
-        // "firefox" lookup (some Icon= fields carry extensions).
+    fn resolver_strips_extension_from_name() {
         let dir = tempfile::tempdir().unwrap();
         let svg = dir.path().join("pixmaps").join("firefox.svg");
         write_file(&svg, b"<svg/>");
-        let resolved = resolve_icon("firefox.png", &[dir.path().to_path_buf()]);
-        assert_eq!(resolved, Some(svg));
+        let resolver = IconResolver::from_parts(&[dir.path().to_path_buf()], &[]);
+        assert_eq!(resolver.resolve("firefox.png"), Some(svg));
     }
 
     #[test]
-    fn resolve_icon_returns_none_when_nothing_found() {
+    fn resolver_returns_none_when_nothing_found() {
         let dir = tempfile::tempdir().unwrap();
-        let resolved = resolve_icon("nonexistent", &[dir.path().to_path_buf()]);
-        assert!(resolved.is_none());
+        let resolver = IconResolver::from_parts(&[dir.path().to_path_buf()], &[]);
+        assert!(resolver.resolve("nonexistent").is_none());
     }
 
     #[test]
-    fn resolve_icon_walks_multiple_roots_in_order() {
+    fn resolver_walks_multiple_roots_in_order() {
         let root_a = tempfile::tempdir().unwrap();
         let root_b = tempfile::tempdir().unwrap();
-        // Put the icon in root_b only; root_a has nothing.
         let icon = root_b.path().join("pixmaps").join("foo.svg");
         write_file(&icon, b"<svg/>");
-        let resolved = resolve_icon(
-            "foo",
+        let resolver = IconResolver::from_parts(
             &[root_a.path().to_path_buf(), root_b.path().to_path_buf()],
+            &[],
         );
-        assert_eq!(resolved, Some(icon));
+        assert_eq!(resolver.resolve("foo"), Some(icon));
     }
+
+    #[test]
+    fn resolver_walks_primary_theme_before_hicolor_fallback() {
+        // Icon exists in both Papirus-Dark and hicolor — primary wins.
+        let dir = tempfile::tempdir().unwrap();
+        let papirus_icon = dir.path().join("icons/Papirus-Dark/scalable/apps/foo.svg");
+        let hicolor_icon = dir.path().join("icons/hicolor/scalable/apps/foo.svg");
+        write_file(&papirus_icon, b"<svg/>");
+        write_file(&hicolor_icon, b"<svg/>");
+        write_file(
+            &dir.path().join("icons/Papirus-Dark/index.theme"),
+            b"[Icon Theme]\nInherits=hicolor\n",
+        );
+        let resolver = IconResolver::from_parts(
+            &[dir.path().to_path_buf()],
+            &["Papirus-Dark".into()],
+        );
+        assert_eq!(resolver.resolve("foo"), Some(papirus_icon));
+    }
+
+    #[test]
+    fn resolver_falls_back_to_inherited_theme_when_primary_lacks_icon() {
+        // Papirus-Dark is a real directory with the apps subdir carved
+        // out so it registers in the cache, but has no foo.svg; the
+        // icon is only present in its inherited Adwaita.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("icons/Papirus-Dark/scalable/apps")).unwrap();
+        write_file(
+            &dir.path().join("icons/Papirus-Dark/index.theme"),
+            b"[Icon Theme]\nInherits=Adwaita\n",
+        );
+        let adwaita_icon = dir.path().join("icons/Adwaita/scalable/apps/foo.svg");
+        write_file(&adwaita_icon, b"<svg/>");
+
+        let roots = vec![dir.path().to_path_buf()];
+        let chain = build_theme_chain(&roots, Some("Papirus-Dark"));
+        let resolver = IconResolver::from_parts(&roots, &chain);
+        assert_eq!(resolver.resolve("foo"), Some(adwaita_icon));
+    }
+
+    #[test]
+    fn resolver_handles_breeze_style_apps_subdir_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        let icon = dir.path().join("icons/breeze/apps/48/foo.svg");
+        write_file(&icon, b"<svg/>");
+        let resolver = IconResolver::from_parts(
+            &[dir.path().to_path_buf()],
+            &["breeze".into()],
+        );
+        assert_eq!(resolver.resolve("foo"), Some(icon));
+    }
+
+    #[test]
+    fn resolver_finds_reverse_dns_name_verbatim_when_theme_stores_it() {
+        // Modern AppStream convention: icon is stored under the full
+        // reverse-DNS name. The resolver must NOT strip the trailing
+        // segment as an "extension" via Path::file_stem.
+        let dir = tempfile::tempdir().unwrap();
+        let icon = dir
+            .path()
+            .join("icons/hicolor/scalable/apps/org.kde.dolphin.svg");
+        write_file(&icon, b"<svg/>");
+        let resolver = IconResolver::from_parts(&[dir.path().to_path_buf()], &[]);
+        assert_eq!(resolver.resolve("org.kde.dolphin"), Some(icon));
+    }
+
+    #[test]
+    fn resolver_falls_back_to_reverse_dns_tail_when_full_name_missing() {
+        // Theme only has `dolphin.svg`, but .desktop says
+        // `Icon=org.kde.dolphin`. The reverse-DNS fallback should
+        // find it via the short tail.
+        let dir = tempfile::tempdir().unwrap();
+        let icon = dir.path().join("icons/breeze/apps/48/dolphin.svg");
+        write_file(&icon, b"<svg/>");
+        let resolver = IconResolver::from_parts(
+            &[dir.path().to_path_buf()],
+            &["breeze".into()],
+        );
+        assert_eq!(resolver.resolve("org.kde.dolphin"), Some(icon));
+    }
+
+    #[test]
+    fn resolver_walks_non_apps_contexts_for_named_icons() {
+        // `.desktop` files can reference freedesktop named icons like
+        // `network-wired` that live in the status context rather than
+        // apps. The resolver must walk non-apps contexts as a fallback.
+        let dir = tempfile::tempdir().unwrap();
+        let icon = dir
+            .path()
+            .join("icons/hicolor/scalable/status/network-wired.svg");
+        write_file(&icon, b"<svg/>");
+        let resolver = IconResolver::from_parts(&[dir.path().to_path_buf()], &[]);
+        assert_eq!(resolver.resolve("network-wired"), Some(icon));
+    }
+
+    #[test]
+    fn resolver_dash_suffix_fallback_strips_progressively() {
+        // Freedesktop spec fallback: `gnome-web-browser` → `gnome-web`
+        // → `gnome`. Theme only stores the short form.
+        let dir = tempfile::tempdir().unwrap();
+        let icon = dir.path().join("icons/hicolor/scalable/apps/gnome.svg");
+        write_file(&icon, b"<svg/>");
+        let resolver = IconResolver::from_parts(&[dir.path().to_path_buf()], &[]);
+        assert_eq!(resolver.resolve("gnome-web-browser"), Some(icon));
+    }
+
+    #[test]
+    fn resolver_walks_loose_icons_at_root_icons_dir() {
+        // Some packages drop icons directly at `<root>/icons/<name>.png`
+        // instead of using a theme subdirectory. The resolver has a
+        // dedicated walk for this non-standard layout.
+        let dir = tempfile::tempdir().unwrap();
+        let icon = dir.path().join("icons/xmaxima.png");
+        write_file(&icon, b"PNG");
+        let resolver = IconResolver::from_parts(&[dir.path().to_path_buf()], &[]);
+        assert_eq!(resolver.resolve("xmaxima"), Some(icon));
+    }
+
+    // ----- icon_name_fallbacks tests -----
+
+    #[test]
+    fn icon_name_fallbacks_plain_name_has_single_candidate() {
+        assert_eq!(icon_name_fallbacks("firefox"), vec!["firefox"]);
+    }
+
+    #[test]
+    fn icon_name_fallbacks_reverse_dns_adds_last_segment() {
+        assert_eq!(
+            icon_name_fallbacks("org.kde.dolphin"),
+            vec!["org.kde.dolphin", "dolphin"]
+        );
+    }
+
+    #[test]
+    fn icon_name_fallbacks_dash_suffix_strips_progressively() {
+        assert_eq!(
+            icon_name_fallbacks("gnome-web-browser"),
+            vec!["gnome-web-browser", "gnome-web", "gnome"]
+        );
+    }
+
+    #[test]
+    fn icon_name_fallbacks_mixed_reverse_dns_and_dash() {
+        // Both fallbacks apply: full name, reverse-DNS tail, then
+        // dash strips of both.
+        let result = icon_name_fallbacks("org.kde.dolphin-view");
+        assert!(result.contains(&"org.kde.dolphin-view".to_string()));
+        assert!(result.contains(&"dolphin-view".to_string()));
+        assert!(result.contains(&"org.kde.dolphin".to_string()));
+        assert!(result.contains(&"dolphin".to_string()));
+    }
+
+    #[test]
+    fn icon_name_fallbacks_deduplicates() {
+        // `foo.foo` — reverse-DNS tail is `foo`, which is distinct
+        // from `foo.foo` so we still emit two entries. But a dash
+        // strip of `foo.foo` would yield nothing (no dashes).
+        assert_eq!(icon_name_fallbacks("foo.foo"), vec!["foo.foo", "foo"]);
+    }
+
+    // ----- strip_known_extension tests -----
+
+    #[test]
+    fn strip_known_extension_removes_png() {
+        assert_eq!(strip_known_extension("firefox.png"), "firefox");
+    }
+
+    #[test]
+    fn strip_known_extension_removes_svg() {
+        assert_eq!(strip_known_extension("firefox.svg"), "firefox");
+    }
+
+    #[test]
+    fn strip_known_extension_preserves_reverse_dns_names() {
+        // `org.kde.dolphin` does NOT have a known image extension,
+        // so it must be returned unchanged.
+        assert_eq!(strip_known_extension("org.kde.dolphin"), "org.kde.dolphin");
+    }
+
+    #[test]
+    fn strip_known_extension_preserves_dotted_name_without_image_ext() {
+        assert_eq!(strip_known_extension("com.example.app"), "com.example.app");
+    }
+
+    // ----- theme inheritance parser tests -----
+
+    #[test]
+    fn parse_theme_inherits_captures_comma_separated_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = dir.path().join("index.theme");
+        write_file(
+            &index,
+            b"[Icon Theme]\nName=Test\nInherits=Papirus,Adwaita,hicolor\n",
+        );
+        assert_eq!(
+            parse_theme_inherits(&index),
+            vec!["Papirus", "Adwaita", "hicolor"]
+        );
+    }
+
+    #[test]
+    fn parse_theme_inherits_ignores_non_icon_theme_sections() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = dir.path().join("index.theme");
+        write_file(
+            &index,
+            b"[16x16/apps]\nInherits=nope\n[Icon Theme]\nInherits=yes\n",
+        );
+        assert_eq!(parse_theme_inherits(&index), vec!["yes"]);
+    }
+
+    #[test]
+    fn parse_theme_inherits_trims_whitespace_and_skips_empty_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = dir.path().join("index.theme");
+        write_file(&index, b"[Icon Theme]\nInherits= A , B ,, C \n");
+        assert_eq!(parse_theme_inherits(&index), vec!["A", "B", "C"]);
+    }
+
+    #[test]
+    fn parse_theme_inherits_missing_file_returns_empty() {
+        assert!(parse_theme_inherits(Path::new("/nonexistent/index.theme")).is_empty());
+    }
+
+    #[test]
+    fn parse_theme_inherits_no_inherits_line_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = dir.path().join("index.theme");
+        write_file(&index, b"[Icon Theme]\nName=Loner\n");
+        assert!(parse_theme_inherits(&index).is_empty());
+    }
+
+    // ----- GTK settings parser tests -----
+
+    #[test]
+    fn read_icon_theme_from_settings_parses_gtk4_style() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = dir.path().join("settings.ini");
+        write_file(
+            &settings,
+            b"[Settings]\ngtk-theme-name=Adwaita-dark\ngtk-icon-theme-name=Papirus-Dark\n",
+        );
+        assert_eq!(
+            read_icon_theme_from_settings(&settings),
+            Some("Papirus-Dark".into())
+        );
+    }
+
+    #[test]
+    fn read_icon_theme_from_settings_strips_surrounding_quotes() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = dir.path().join("settings.ini");
+        write_file(&settings, b"[Settings]\ngtk-icon-theme-name=\"Breeze\"\n");
+        assert_eq!(
+            read_icon_theme_from_settings(&settings),
+            Some("Breeze".into())
+        );
+    }
+
+    #[test]
+    fn read_icon_theme_from_settings_missing_file_returns_none() {
+        assert!(read_icon_theme_from_settings(Path::new("/nonexistent/settings.ini")).is_none());
+    }
+
+    #[test]
+    fn read_icon_theme_from_settings_key_in_wrong_section_returns_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = dir.path().join("settings.ini");
+        write_file(
+            &settings,
+            b"[Other]\ngtk-icon-theme-name=Wrong\n[Settings]\ngtk-font-name=Sans\n",
+        );
+        assert!(read_icon_theme_from_settings(&settings).is_none());
+    }
+
+    // ----- build_theme_chain tests -----
+
+    #[test]
+    fn build_theme_chain_walks_inheritance_transitively() {
+        let dir = tempfile::tempdir().unwrap();
+        write_file(
+            &dir.path().join("icons/A/index.theme"),
+            b"[Icon Theme]\nInherits=B\n",
+        );
+        write_file(
+            &dir.path().join("icons/B/index.theme"),
+            b"[Icon Theme]\nInherits=C\n",
+        );
+        write_file(
+            &dir.path().join("icons/C/index.theme"),
+            b"[Icon Theme]\nName=C\n",
+        );
+        let roots = vec![dir.path().to_path_buf()];
+        assert_eq!(
+            build_theme_chain(&roots, Some("A")),
+            vec!["A", "B", "C", "hicolor"]
+        );
+    }
+
+    #[test]
+    fn build_theme_chain_detects_cycles() {
+        let dir = tempfile::tempdir().unwrap();
+        write_file(
+            &dir.path().join("icons/X/index.theme"),
+            b"[Icon Theme]\nInherits=Y\n",
+        );
+        write_file(
+            &dir.path().join("icons/Y/index.theme"),
+            b"[Icon Theme]\nInherits=X\n",
+        );
+        let roots = vec![dir.path().to_path_buf()];
+        assert_eq!(
+            build_theme_chain(&roots, Some("X")),
+            vec!["X", "Y", "hicolor"]
+        );
+    }
+
+    #[test]
+    fn build_theme_chain_without_primary_is_just_hicolor() {
+        assert_eq!(build_theme_chain(&[], None), vec!["hicolor"]);
+    }
+
+    #[test]
+    fn build_theme_chain_primary_named_hicolor_yields_single_entry() {
+        assert_eq!(build_theme_chain(&[], Some("hicolor")), vec!["hicolor"]);
+    }
+
+    #[test]
+    fn build_theme_chain_missing_index_theme_still_includes_primary() {
+        assert_eq!(
+            build_theme_chain(&[], Some("MysteryTheme")),
+            vec!["MysteryTheme", "hicolor"]
+        );
+    }
+
 }
