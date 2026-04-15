@@ -50,6 +50,43 @@ pub enum Event {
 
     /// The system transitioned between AC and battery power.
     PowerStateChanged { on_battery: bool },
+
+    /// A ctl client requested a bar-density change. Stringly-typed so
+    /// `levshell-core` stays free of any IPC dependency. Values match the
+    /// serde-rendered form of `levshell_ipc::BarDensity`: `"full"`,
+    /// `"compact"`, or `"hidden"`.
+    BarDensityRequested { mode: String },
+
+    /// A ctl client requested a context-profile action. `action` is one of
+    /// `"activate"`, `"cycle"`, or `"query"`. `name` is the profile name
+    /// for `activate`, optional otherwise.
+    ProfileActionRequested {
+        action: String,
+        name: Option<String>,
+    },
+
+    /// A ctl client requested a command-palette action. `action` is one of
+    /// `"open"`, `"close"`, `"toggle"`, or `"query"`. `query` is the search
+    /// string for `query`, optional otherwise.
+    PaletteActionRequested {
+        action: String,
+        query: Option<String>,
+    },
+
+    /// The shell sent a live command-palette query (user typing in the
+    /// palette input). Routed from `ShellMessage::CommandPaletteQuery` by
+    /// the daemon's shell reader task so the palette module can
+    /// re-rank results without each module having to parse `ShellMessage`.
+    CommandPaletteQueryReceived { query: String },
+
+    /// The shell signalled that the user picked a palette item. Routed
+    /// from `ShellMessage::CommandPaletteSelect`. The palette module
+    /// dispatches to the provider named by `provider` and asks it to
+    /// execute the item identified by `item_id`.
+    CommandPaletteSelectReceived {
+        provider: String,
+        item_id: String,
+    },
 }
 
 /// A discriminant for filtering subscriptions without instantiating an [`Event`].
@@ -60,6 +97,11 @@ pub enum EventKind {
     WindowFocused,
     DataStoreUpdated,
     PowerStateChanged,
+    BarDensityRequested,
+    ProfileActionRequested,
+    PaletteActionRequested,
+    CommandPaletteQueryReceived,
+    CommandPaletteSelectReceived,
 }
 
 impl Event {
@@ -69,6 +111,11 @@ impl Event {
             Event::WindowFocused { .. } => EventKind::WindowFocused,
             Event::DataStoreUpdated { .. } => EventKind::DataStoreUpdated,
             Event::PowerStateChanged { .. } => EventKind::PowerStateChanged,
+            Event::BarDensityRequested { .. } => EventKind::BarDensityRequested,
+            Event::ProfileActionRequested { .. } => EventKind::ProfileActionRequested,
+            Event::PaletteActionRequested { .. } => EventKind::PaletteActionRequested,
+            Event::CommandPaletteQueryReceived { .. } => EventKind::CommandPaletteQueryReceived,
+            Event::CommandPaletteSelectReceived { .. } => EventKind::CommandPaletteSelectReceived,
         }
     }
 }

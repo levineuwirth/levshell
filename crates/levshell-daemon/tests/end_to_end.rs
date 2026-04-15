@@ -15,15 +15,60 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use levshell_core::{EventBus, Event, EventKind, Module, ModuleResult};
+use levshell_core::{Event, EventBus, EventKind, Module, ModuleResult};
 use levshell_daemon::{run, DaemonConfig, ModuleFactory};
 use levshell_ipc::{
-    DaemonMessage, IpcConnection, JsonCodec, ShellMessage, WidgetAction, WidgetPublisher,
-    WidgetStatus, WidgetUpdate,
+    BarDensity, ClientRole, CtlRequest, CtlResponse, DaemonMessage, Hello, IpcConnection,
+    JsonCodec, ShellMessage, WidgetAction, WidgetPublisher, WidgetStatus, WidgetUpdate,
+};
+use levshell_modules::{
+    default_context_engine, default_widgets, MemoryModule, PaletteModule, PaletteProvider,
 };
 use serde_json::json;
 use tokio::net::UnixStream;
 use tokio::sync::oneshot;
+
+/// Helper: connect a shell client, send the Hello handshake, and return the
+/// ready-to-use IpcConnection.
+async fn connect_shell(socket_path: &std::path::Path) -> IpcConnection<JsonCodec> {
+    let stream = UnixStream::connect(socket_path)
+        .await
+        .expect("shell connect");
+    let mut conn = IpcConnection::<JsonCodec>::from_unix_stream(stream);
+    conn.writer()
+        .send(&Hello::new(ClientRole::Shell))
+        .await
+        .expect("send shell Hello");
+    conn
+}
+
+/// Helper: connect a ctl client, send the Hello handshake, send a request,
+/// read one response, and return it.
+async fn ctl_round_trip(
+    socket_path: &std::path::Path,
+    request: CtlRequest,
+) -> CtlResponse {
+    let stream = UnixStream::connect(socket_path)
+        .await
+        .expect("ctl connect");
+    let mut conn = IpcConnection::<JsonCodec>::from_unix_stream(stream);
+    conn.writer()
+        .send(&Hello::new(ClientRole::Ctl))
+        .await
+        .expect("send ctl Hello");
+    conn.writer().send(&request).await.expect("send ctl request");
+    conn.reader().recv().await.expect("recv ctl response")
+}
+
+async fn wait_for_socket(path: &std::path::Path) {
+    for _ in 0..50 {
+        if path.exists() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("daemon never bound socket at {}", path.display());
+}
 
 /// Test-only module that publishes a single WidgetUpdate the moment `start`
 /// fires and also publishes a bus event so we can validate the bus pathway
@@ -85,7 +130,7 @@ async fn daemon_publishes_widget_update_over_ipc_to_a_unixstream_shell() {
         publisher_capacity: 16,
     };
 
-    let factory: ModuleFactory = Box::new(|bus, publisher| {
+    let factory: ModuleFactory = Box::new(|bus, publisher, _store| {
         vec![Box::new(FakeModule { bus, publisher }) as Box<dyn Module>]
     });
 
@@ -99,20 +144,10 @@ async fn daemon_publishes_widget_update_over_ipc_to_a_unixstream_shell() {
     // connects.
     let daemon_handle = tokio::spawn(async move { run(config, factory, shutdown).await });
 
-    // Wait for the daemon to bind the socket.
-    for _ in 0..50 {
-        if socket_path.exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    assert!(socket_path.exists(), "daemon should have bound the socket");
+    wait_for_socket(&socket_path).await;
 
-    // Connect as the "shell".
-    let stream = UnixStream::connect(&socket_path)
-        .await
-        .expect("client connect");
-    let mut shell_conn = IpcConnection::<JsonCodec>::from_unix_stream(stream);
+    // Connect as the "shell" with the Hello handshake.
+    let mut shell_conn = connect_shell(&socket_path).await;
 
     // The fake module publishes its WidgetUpdate during start(), which
     // happens after the daemon accept()s our connection above. We expect
@@ -160,4 +195,574 @@ async fn daemon_publishes_widget_update_over_ipc_to_a_unixstream_shell() {
 
     // The IpcServer's Drop should have unlinked the socket file.
     assert!(!socket_path.exists(), "socket file should be unlinked on shutdown");
+}
+
+// ---------------------------------------------------------------------------
+// Multi-client tests (Phase 1.1)
+// ---------------------------------------------------------------------------
+
+fn empty_factory() -> ModuleFactory {
+    Box::new(|_bus, _publisher, _store| Vec::new())
+}
+
+/// Boot the daemon with a given factory, return the daemon task handle, the
+/// shutdown sender, and the socket path. The caller is responsible for
+/// triggering shutdown and joining the handle.
+async fn boot_daemon(
+    factory: ModuleFactory,
+) -> (
+    tempfile::TempDir,
+    std::path::PathBuf,
+    tokio::task::JoinHandle<anyhow::Result<()>>,
+    oneshot::Sender<()>,
+) {
+    let (dir, db_path, socket_path) = temp_paths();
+    let config = DaemonConfig {
+        db_path,
+        socket_path: socket_path.clone(),
+        publisher_capacity: 16,
+    };
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let shutdown: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
+        Box::pin(async move {
+            let _ = shutdown_rx.await;
+        });
+    let handle = tokio::spawn(async move { run(config, factory, shutdown).await });
+    wait_for_socket(&socket_path).await;
+    (dir, socket_path, handle, shutdown_tx)
+}
+
+#[tokio::test]
+async fn ctl_ping_round_trips_before_any_shell() {
+    let (_dir, socket_path, handle, shutdown_tx) = boot_daemon(empty_factory()).await;
+
+    let response = ctl_round_trip(&socket_path, CtlRequest::Ping).await;
+    assert!(matches!(response, CtlResponse::Pong));
+
+    let _ = shutdown_tx.send(());
+    let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
+}
+
+#[tokio::test]
+async fn ctl_status_reflects_shell_connection_state() {
+    let (_dir, socket_path, handle, shutdown_tx) = boot_daemon(empty_factory()).await;
+
+    // No shell yet — status should say shell_connected = false.
+    let response = ctl_round_trip(&socket_path, CtlRequest::Status).await;
+    let snapshot = match response {
+        CtlResponse::Status(s) => s,
+        other => panic!("expected Status, got {other:?}"),
+    };
+    assert!(!snapshot.shell_connected);
+    assert_eq!(snapshot.module_count, 0);
+    assert_eq!(snapshot.protocol_version, levshell_ipc::PROTOCOL_VERSION);
+
+    // Connect a shell.
+    let _shell_conn = connect_shell(&socket_path).await;
+    // Give the daemon a tick to finalize the shell setup.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let response = ctl_round_trip(&socket_path, CtlRequest::Status).await;
+    let snapshot = match response {
+        CtlResponse::Status(s) => s,
+        other => panic!("expected Status, got {other:?}"),
+    };
+    assert!(snapshot.shell_connected);
+
+    let _ = shutdown_tx.send(());
+    let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
+}
+
+#[tokio::test]
+async fn ctl_density_change_publishes_bus_event() {
+    use levshell_ipc::BarDensity;
+
+    let (_dir, socket_path, handle, shutdown_tx) = boot_daemon(empty_factory()).await;
+
+    // Subscribe a test observer on the bus BEFORE sending the ctl request.
+    // Can't subscribe through the daemon externally, so we drive this via a
+    // FakeModule-style factory in a follow-up test instead.
+    //
+    // This test just verifies the round-trip returns Ok — the bus event is
+    // observed by the dedicated bus-subscriber test below.
+    let response = ctl_round_trip(
+        &socket_path,
+        CtlRequest::Density {
+            mode: BarDensity::Compact,
+        },
+    )
+    .await;
+    assert!(matches!(response, CtlResponse::Ok));
+
+    let _ = shutdown_tx.send(());
+    let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
+}
+
+#[tokio::test]
+async fn second_shell_connection_is_rejected() {
+    let (_dir, socket_path, handle, shutdown_tx) = boot_daemon(empty_factory()).await;
+
+    // First shell gets in.
+    let _shell = connect_shell(&socket_path).await;
+    tokio::time::sleep(Duration::from_millis(30)).await;
+
+    // Second shell attempts to connect. The daemon sends a CtlResponse::Error
+    // and closes. We read the error back on the shell-facing reader.
+    let stream = UnixStream::connect(&socket_path)
+        .await
+        .expect("second shell connect");
+    let mut second = IpcConnection::<JsonCodec>::from_unix_stream(stream);
+    second
+        .writer()
+        .send(&Hello::new(ClientRole::Shell))
+        .await
+        .expect("send Hello");
+
+    let response: CtlResponse = tokio::time::timeout(
+        Duration::from_secs(2),
+        second.reader().recv(),
+    )
+    .await
+    .expect("recv within 2s")
+    .expect("recv ok");
+    assert!(
+        matches!(response, CtlResponse::Error { .. }),
+        "expected rejection, got {response:?}"
+    );
+
+    let _ = shutdown_tx.send(());
+    let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
+}
+
+#[tokio::test]
+async fn ctl_and_shell_coexist_with_shell_receiving_updates() {
+    // End-to-end: shell connects, fake module publishes a WidgetUpdate, ctl
+    // client queries status while the shell is attached, the shell still
+    // receives its update without interference.
+    let (_dir, db_path, socket_path) = temp_paths();
+    let config = DaemonConfig {
+        db_path,
+        socket_path: socket_path.clone(),
+        publisher_capacity: 16,
+    };
+    let factory: ModuleFactory = Box::new(|bus, publisher, _store| {
+        vec![Box::new(FakeModule { bus, publisher }) as Box<dyn Module>]
+    });
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let shutdown: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
+        Box::pin(async move {
+            let _ = shutdown_rx.await;
+        });
+    let handle = tokio::spawn(async move { run(config, factory, shutdown).await });
+    wait_for_socket(&socket_path).await;
+
+    let mut shell_conn = connect_shell(&socket_path).await;
+
+    // Intermix a ctl Status request before reading the shell's update.
+    let status = ctl_round_trip(&socket_path, CtlRequest::Status).await;
+    assert!(matches!(status, CtlResponse::Status(_)));
+
+    // Shell should still receive the widget update from the fake module.
+    let received: DaemonMessage = tokio::time::timeout(
+        Duration::from_secs(2),
+        shell_conn.reader().recv(),
+    )
+    .await
+    .expect("recv within 2s")
+    .expect("recv ok");
+    assert!(matches!(received, DaemonMessage::WidgetUpdate(_)));
+
+    // Another ctl ping mid-stream should still work.
+    let pong = ctl_round_trip(&socket_path, CtlRequest::Ping).await;
+    assert!(matches!(pong, CtlResponse::Pong));
+
+    let _ = shutdown_tx.send(());
+    let _ = tokio::time::timeout(Duration::from_secs(3), handle)
+        .await
+        .expect("daemon to exit");
+}
+
+// ---------------------------------------------------------------------------
+// Telemetry integration (Phase 1.3)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn memory_module_publishes_initial_widget_update_over_ipc() {
+    // MemoryModule publishes a memory WidgetUpdate during start() so this
+    // test stays fast — no need to wait a tick interval. It also exercises
+    // the /proc/meminfo read path on the actual host.
+    let (_dir, db_path, socket_path) = temp_paths();
+    let config = DaemonConfig {
+        db_path,
+        socket_path: socket_path.clone(),
+        publisher_capacity: 64,
+    };
+    let factory: ModuleFactory = Box::new(|_bus, publisher, _store| {
+        vec![Box::new(MemoryModule::new(publisher)) as Box<dyn Module>]
+    });
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let shutdown: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
+        Box::pin(async move {
+            let _ = shutdown_rx.await;
+        });
+    let handle = tokio::spawn(async move { run(config, factory, shutdown).await });
+    wait_for_socket(&socket_path).await;
+
+    let mut shell_conn = connect_shell(&socket_path).await;
+
+    let received: DaemonMessage = tokio::time::timeout(
+        Duration::from_secs(2),
+        shell_conn.reader().recv(),
+    )
+    .await
+    .expect("recv timeout")
+    .expect("recv ok");
+
+    match received {
+        DaemonMessage::WidgetUpdate(update) => {
+            assert_eq!(update.widget_id, "memory");
+            assert_eq!(update.widget_type, "memory");
+            assert_eq!(update.status, WidgetStatus::Normal);
+            let used_percent = update
+                .state
+                .get("used_percent")
+                .and_then(|v| v.as_f64())
+                .expect("used_percent field present");
+            assert!(
+                (0.0..=100.0).contains(&used_percent),
+                "used_percent out of range: {used_percent}"
+            );
+            let total_kb = update
+                .state
+                .get("total_kb")
+                .and_then(|v| v.as_u64())
+                .expect("total_kb field present");
+            assert!(total_kb > 0);
+        }
+        other => panic!("expected memory WidgetUpdate, got {other:?}"),
+    }
+
+    let _ = shutdown_tx.send(());
+    let _ = tokio::time::timeout(Duration::from_secs(3), handle)
+        .await
+        .expect("daemon to exit");
+}
+
+// ---------------------------------------------------------------------------
+// Context engine integration (Phase 1.2 Step D)
+// ---------------------------------------------------------------------------
+
+/// Drain messages from the shell until we find one that matches `pred`, or
+/// the timeout elapses. Returns all messages read along the way for
+/// debugging.
+async fn drain_until<F>(
+    conn: &mut IpcConnection<JsonCodec>,
+    mut pred: F,
+    timeout: Duration,
+) -> (DaemonMessage, Vec<DaemonMessage>)
+where
+    F: FnMut(&DaemonMessage) -> bool,
+{
+    let mut history = Vec::new();
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            panic!(
+                "drain_until: timed out; observed {} messages: {:#?}",
+                history.len(),
+                history
+            );
+        }
+        let msg = tokio::time::timeout(remaining, conn.reader().recv())
+            .await
+            .unwrap_or_else(|_| panic!("drain_until timeout; history: {history:#?}"))
+            .expect("recv ok");
+        if pred(&msg) {
+            return (msg, history);
+        }
+        history.push(msg);
+    }
+}
+
+#[tokio::test]
+async fn context_engine_publishes_initial_bar_layout_on_shell_connect() {
+    // Boot the daemon with a factory that only includes the context engine
+    // (no Sway, which isn't available in CI).
+    let (_dir, db_path, socket_path) = temp_paths();
+    let config = DaemonConfig {
+        db_path,
+        socket_path: socket_path.clone(),
+        publisher_capacity: 64,
+    };
+    let factory: ModuleFactory = Box::new(|_bus, publisher, _store| {
+        vec![Box::new(default_context_engine(publisher)) as Box<dyn Module>]
+    });
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let shutdown: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
+        Box::pin(async move {
+            let _ = shutdown_rx.await;
+        });
+    let handle = tokio::spawn(async move { run(config, factory, shutdown).await });
+    wait_for_socket(&socket_path).await;
+
+    let mut shell_conn = connect_shell(&socket_path).await;
+
+    // The context engine publishes an initial BarLayout during start().
+    // We should see it before any event has fired.
+    let (msg, _history) = drain_until(
+        &mut shell_conn,
+        |m| matches!(m, DaemonMessage::BarLayout(_)),
+        Duration::from_secs(2),
+    )
+    .await;
+    let layout = match msg {
+        DaemonMessage::BarLayout(l) => l,
+        other => panic!("expected BarLayout, got {other:?}"),
+    };
+
+    // Built-in widgets include clock (center) and battery/cpu/notifications
+    // (right). Workspace-indicator goes left.
+    assert!(layout.left.iter().any(|id| id == "workspace-indicator"));
+    assert!(layout.center.iter().any(|id| id == "clock"));
+    assert!(layout.right.iter().any(|id| id == "battery"));
+
+    let _ = shutdown_tx.send(());
+    let _ = tokio::time::timeout(Duration::from_secs(3), handle)
+        .await
+        .expect("daemon to exit");
+}
+
+#[tokio::test]
+async fn ctl_density_change_triggers_context_engine_republish() {
+    // Boot with a context engine configured so that `bar.density ==
+    // "compact"` promotes `notifications` to Compact. That rule lets us
+    // observe the reactive path: ctl → bus → context-engine → IPC shell.
+    use levshell_context::{parse_expression, CompiledRule};
+    use levshell_ipc::Prominence;
+    use levshell_modules::ContextEngineModule;
+
+    let (_dir, db_path, socket_path) = temp_paths();
+    let config = DaemonConfig {
+        db_path,
+        socket_path: socket_path.clone(),
+        publisher_capacity: 64,
+    };
+    let factory: ModuleFactory = Box::new(|_bus, publisher, _store| {
+        let rule = CompiledRule::new(
+            "notifications",
+            parse_expression(r#"bar.density == "compact""#).unwrap(),
+            Prominence::Compact,
+        );
+        let engine = ContextEngineModule::new(publisher)
+            .with_widgets(default_widgets())
+            .with_rules(vec![rule]);
+        vec![Box::new(engine) as Box<dyn Module>]
+    });
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let shutdown: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
+        Box::pin(async move {
+            let _ = shutdown_rx.await;
+        });
+    let handle = tokio::spawn(async move { run(config, factory, shutdown).await });
+    wait_for_socket(&socket_path).await;
+
+    let mut shell_conn = connect_shell(&socket_path).await;
+
+    // Drain the initial BarLayout burst so it doesn't confuse the match
+    // below. notifications starts at IconOnly (its default).
+    let _ = drain_until(
+        &mut shell_conn,
+        |m| {
+            if let DaemonMessage::WidgetVisibility(v) = m {
+                v.widget_id == "notifications" && v.prominence == Prominence::IconOnly
+            } else {
+                false
+            }
+        },
+        Duration::from_secs(2),
+    )
+    .await;
+
+    // Send the ctl density change. This publishes BarDensityRequested on
+    // the bus, which the context engine subscribes to.
+    let response = ctl_round_trip(
+        &socket_path,
+        CtlRequest::Density {
+            mode: BarDensity::Compact,
+        },
+    )
+    .await;
+    assert!(matches!(response, CtlResponse::Ok));
+
+    // Because rule evaluation promotes notifications from IconOnly to
+    // Compact, the hysteresis activation_delay (default 2s) would normally
+    // keep the committed value at IconOnly. But the ticker fires every
+    // 500ms and observes the pending transition — so after ~2s we should
+    // see a WidgetVisibility with prominence=Compact.
+    let (msg, _history) = drain_until(
+        &mut shell_conn,
+        |m| {
+            matches!(
+                m,
+                DaemonMessage::WidgetVisibility(v)
+                    if v.widget_id == "notifications" && v.prominence == Prominence::Compact
+            )
+        },
+        Duration::from_secs(5),
+    )
+    .await;
+    let vis = match msg {
+        DaemonMessage::WidgetVisibility(v) => v,
+        _ => unreachable!(),
+    };
+    assert!(vis.visible);
+
+    let _ = shutdown_tx.send(());
+    let _ = tokio::time::timeout(Duration::from_secs(3), handle)
+        .await
+        .expect("daemon to exit");
+}
+
+// ---------------------------------------------------------------------------
+// Palette integration (Phase 1.5)
+// ---------------------------------------------------------------------------
+
+/// Stub PaletteProvider used by the palette integration test. Always
+/// returns a fixed set of items so assertions are deterministic without
+/// depending on real apps / workspaces / notes.
+struct StubPaletteProvider;
+
+#[async_trait]
+impl PaletteProvider for StubPaletteProvider {
+    fn name(&self) -> &'static str {
+        "stub"
+    }
+    async fn search(
+        &self,
+        _query: &str,
+    ) -> Vec<levshell_modules::PaletteItem> {
+        vec![
+            levshell_modules::PaletteItem::new("stub", "one", "First item").with_score(0.9),
+            levshell_modules::PaletteItem::new("stub", "two", "Second item").with_score(0.7),
+        ]
+    }
+    async fn execute(
+        &self,
+        _item_id: &str,
+    ) -> Result<(), levshell_modules::palette::provider::ProviderError> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn ctl_palette_open_publishes_widget_update_with_results() {
+    // Full end-to-end verification of the Phase 1.5 palette path:
+    // ctl sends `palette open` → daemon publishes PaletteActionRequested
+    // → PaletteModule subscribes, refreshes from its providers, and
+    // re-publishes a `command-palette` WidgetUpdate → we read it off
+    // the shell socket and assert open=true with non-empty results.
+    let (_dir, db_path, socket_path) = temp_paths();
+    let config = DaemonConfig {
+        db_path,
+        socket_path: socket_path.clone(),
+        publisher_capacity: 64,
+    };
+    let factory: ModuleFactory = Box::new(|_bus, publisher, _store| {
+        let palette = PaletteModule::new(publisher)
+            .with_provider(Box::new(StubPaletteProvider));
+        vec![Box::new(palette) as Box<dyn Module>]
+    });
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let shutdown: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
+        Box::pin(async move {
+            let _ = shutdown_rx.await;
+        });
+    let handle = tokio::spawn(async move { run(config, factory, shutdown).await });
+    wait_for_socket(&socket_path).await;
+
+    let mut shell_conn = connect_shell(&socket_path).await;
+
+    // First frame: initial closed-state palette WidgetUpdate from
+    // PaletteModule::start().
+    let (initial, _history) = drain_until(
+        &mut shell_conn,
+        |m| matches!(
+            m,
+            DaemonMessage::WidgetUpdate(u) if u.widget_id == "command-palette"
+        ),
+        Duration::from_secs(2),
+    )
+    .await;
+    match initial {
+        DaemonMessage::WidgetUpdate(u) => {
+            let open = u.state.get("open").and_then(|v| v.as_bool());
+            assert_eq!(open, Some(false), "initial palette should be closed");
+        }
+        _ => unreachable!(),
+    }
+
+    // Fire ctl palette open. This publishes PaletteActionRequested on
+    // the bus, which the PaletteModule's subscription picks up and
+    // turns into a fresh WidgetUpdate with open=true.
+    let response = ctl_round_trip(
+        &socket_path,
+        CtlRequest::Palette {
+            action: levshell_ipc::PaletteAction::Open,
+            query: None,
+        },
+    )
+    .await;
+    assert!(matches!(response, CtlResponse::Ok));
+
+    // Drain until we see the open-state palette update. There may be
+    // other WidgetUpdates in-between (none expected in this minimal
+    // factory, but be defensive).
+    let (open_msg, _) = drain_until(
+        &mut shell_conn,
+        |m| matches!(
+            m,
+            DaemonMessage::WidgetUpdate(u)
+                if u.widget_id == "command-palette"
+                && u.state.get("open").and_then(|v| v.as_bool()) == Some(true)
+        ),
+        Duration::from_secs(3),
+    )
+    .await;
+    let state = match open_msg {
+        DaemonMessage::WidgetUpdate(u) => u.state,
+        _ => unreachable!(),
+    };
+    let results = state
+        .get("results")
+        .and_then(|v| v.as_array())
+        .expect("results array present");
+    assert_eq!(results.len(), 2, "stub provider should have yielded two items");
+    assert_eq!(
+        results[0].get("title").and_then(|v| v.as_str()),
+        Some("First item")
+    );
+
+    // Now simulate a shell-initiated close via ShellMessage.
+    shell_conn
+        .writer()
+        .send(&ShellMessage::CommandPaletteClose)
+        .await
+        .unwrap();
+    let (_closed, _) = drain_until(
+        &mut shell_conn,
+        |m| matches!(
+            m,
+            DaemonMessage::WidgetUpdate(u)
+                if u.widget_id == "command-palette"
+                && u.state.get("open").and_then(|v| v.as_bool()) == Some(false)
+        ),
+        Duration::from_secs(3),
+    )
+    .await;
+
+    let _ = shutdown_tx.send(());
+    let _ = tokio::time::timeout(Duration::from_secs(3), handle)
+        .await
+        .expect("daemon to exit");
 }

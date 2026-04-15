@@ -10,9 +10,23 @@
 
 #![forbid(unsafe_code)]
 
+pub mod context_engine;
+pub mod palette;
 pub mod sway;
+pub mod telemetry;
 
+pub use context_engine::{default_context_engine, default_widgets, ContextEngineModule};
+pub use palette::{
+    AppLauncherProvider, NoteSearchProvider, PaletteItem, PaletteModule, PaletteProvider,
+    PaletteState, WorkspaceSwitcherProvider, PALETTE_WIDGET_ID, PALETTE_WIDGET_TYPE,
+};
 pub use sway::{
     SwayWorkspaceModule, WorkspaceIndicatorState, WorkspaceInfo, WORKSPACE_WIDGET_ID,
     WORKSPACE_WIDGET_TYPE,
+};
+pub use telemetry::{
+    BatteryModule, BatteryState, BatteryStatus, CpuModule, CpuSample, CpuState, IfaceRate,
+    MemoryModule, MemoryState, NetworkModule, NetworkState, BATTERY_WIDGET_ID,
+    BATTERY_WIDGET_TYPE, CPU_WIDGET_ID, CPU_WIDGET_TYPE, MEMORY_WIDGET_ID, MEMORY_WIDGET_TYPE,
+    NETWORK_WIDGET_ID, NETWORK_WIDGET_TYPE,
 };
