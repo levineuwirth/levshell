@@ -1,0 +1,64 @@
+// MemoryWidget — renders the memory state from telemetry::MemoryModule.
+//
+// state shape:
+//   {
+//     "total_kb": 61341412,
+//     "available_kb": 49607908,
+//     "used_kb": 11733504,
+//     "used_percent": 19.128
+//   }
+
+import QtQuick
+import ".."
+
+WidgetWrapper {
+    id: root
+
+    property var widgetState: ({})
+
+    readonly property real usedPercent: (widgetState && widgetState.used_percent) || 0
+    readonly property real totalGb: ((widgetState && widgetState.total_kb) || 0) / 1024.0 / 1024.0
+    readonly property real usedGb: ((widgetState && widgetState.used_kb) || 0) / 1024.0 / 1024.0
+
+    readonly property color usageColor: {
+        if (root.degraded) return root.contentColor;
+        if (usedPercent > 90) return Theme.error;
+        if (usedPercent > 75) return Theme.warning;
+        return root.contentColor;
+    }
+
+    Row {
+        anchors.verticalCenter: parent.verticalCenter
+        anchors.left: parent.left
+        spacing: Theme.spaceSm
+
+        Text {
+            anchors.verticalCenter: parent.verticalCenter
+            text: "▤"
+            color: root.usageColor
+            font.pixelSize: Theme.iconSizeFull
+        }
+
+        Text {
+            anchors.verticalCenter: parent.verticalCenter
+            text: Math.round(root.usedPercent) + "%"
+            color: root.usageColor
+            font.family: Theme.fontMono
+            font.pixelSize: Theme.typeLabel
+            font.weight: Theme.typeBodyEmphasisWeight
+            font.features: ({ "tnum": 1 })
+            visible: root.prominence !== "icon_only"
+        }
+
+        Text {
+            anchors.verticalCenter: parent.verticalCenter
+            text: root.usedGb.toFixed(1) + "/" + root.totalGb.toFixed(0) + "G"
+            color: root.subtleColor
+            font.family: Theme.fontMono
+            font.pixelSize: Theme.typeCaption
+            font.weight: Theme.typeCaptionWeight
+            font.features: ({ "tnum": 1 })
+            visible: root.prominence === "visible" || root.prominence === "expanded"
+        }
+    }
+}

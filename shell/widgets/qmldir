@@ -1,0 +1,8 @@
+WorkspaceIndicator 1.0 WorkspaceIndicator.qml
+ClockWidget 1.0 ClockWidget.qml
+CpuWidget 1.0 CpuWidget.qml
+MemoryWidget 1.0 MemoryWidget.qml
+BatteryWidget 1.0 BatteryWidget.qml
+NetworkWidget 1.0 NetworkWidget.qml
+NotificationsWidget 1.0 NotificationsWidget.qml
+CommandPalette 1.0 CommandPalette.qml

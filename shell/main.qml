@@ -1,55 +1,159 @@
-// Levshell QML shell — Phase 0 workspace-indicator bar.
+// Levshell QML shell — Phase 1.4 bar.
 //
 // Run with:
 //   quickshell -p shell/main.qml
 //
-// This file is the *minimum* Quickshell config that closes the Phase 0
-// vertical slice: it opens a top-edge PanelWindow on every screen, connects
-// to the daemon's Unix domain socket at $XDG_RUNTIME_DIR/levshell.sock, and
-// renders the workspace_indicator widget that the SwayWorkspaceModule pushes
-// over IPC.
+// ## Architecture
 //
-// Wire format reminder (see crates/levshell-ipc/src/framing.rs):
+// The shell holds three reactive maps as root properties:
 //
-//   [4-byte big-endian u32 length] [N bytes JSON-encoded DaemonMessage]
+//   - widgetStates:     widget_id → JSON state (from WidgetUpdate)
+//   - widgetStatuses:   widget_id → health string ("normal"|"stale"|"error"|"unavailable")
+//   - widgetVisibility: widget_id → { visible, prominence }
+//   - barLayout:        { left: [ids], center: [ids], right: [ids] }
 //
-// Each DaemonMessage is a tagged JSON object:
+// A widget registry maps widget_id → Component. Each zone is a Row
+// containing a Repeater over barLayout.{left|center|right}; the delegate
+// is a Loader that picks the Component from the registry and passes the
+// state/status/prominence as properties.
 //
-//   { "type": "widget_update", "widget_id": "...", "widget_type": "...",
-//     "state": <opaque>, "status": "normal" }
+// ## Hello handshake
 //
-// The Phase-0 widget_update we care about has
-// widget_id == "workspace-indicator" and a state object of the shape:
+// The daemon enforces a one-frame Hello handshake since Phase 1.1
+// (crates/levshell-ipc/src/handshake.rs). Without it the connection is
+// idle forever — the daemon never sends any DaemonMessage, and the shell
+// never renders anything beyond defaults. `onConnectionStateChanged`
+// writes the Hello immediately on connect.
 //
-//   { "workspaces": [ { "name": "...", "num": 1, "focused": true, ... }, ... ],
-//     "active":          "research",
-//     "focused_window":  "Alacritty" }
+// ## Wire format
 //
-// NOTE: Quickshell's Io.Socket binary-frame API can vary across versions.
-// The handler below is the version that works on Quickshell ≥ 0.1; if your
-// build exposes a different signal name (`onRead`, `dataReady`, ...), adjust
-// the connection inside `Socket {}` accordingly. The framing math is
-// version-independent.
+// One JSON-encoded DaemonMessage per line, '\n'-terminated (NDJSON).
+// SplitParser with splitMarker "\n" is safe because compact serde_json
+// output never contains unescaped newlines.
 
 import QtQuick
 import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
+import "."
+import "widgets"
 
 Scope {
     id: shell
 
-    // Mirrored state for the bar to bind against.
-    property string activeWorkspace: "—"
-    property string focusedWindow: ""
-    property var workspaces: []
+    // ----------------------------------------------------------------------
+    // Reactive state stores.
+    // ----------------------------------------------------------------------
+    // Using plain objects so that re-assignment through Object.assign
+    // triggers QML's property-change notifications. Mutating in place
+    // would not.
+    property var widgetStates: ({})
+    property var widgetStatuses: ({})
+    property var widgetVisibility: ({})
+    property var barLayout: ({ left: [], center: [], right: [] })
+    // Command-palette overlay state, driven by the `command-palette`
+    // widget_update messages. The palette is intentionally NOT in
+    // widgetRegistry / widgetStates — it renders as an overlay window,
+    // not as a widget inside any of the bar zones.
+    property var paletteState: ({ open: false, query: "", results: [] })
 
     // ----------------------------------------------------------------------
-    // PanelWindow: top edge of every screen.
+    // Widget registry: map widget_id → Component.
+    // ----------------------------------------------------------------------
+    // Each entry is a QML Component we hand to a Loader. Keys must match
+    // the widget_id that the daemon publishes in BarLayout.
+    property var widgetRegistry: ({
+        "workspace-indicator": workspaceIndicatorComponent,
+        "clock": clockComponent,
+        "cpu": cpuComponent,
+        "memory": memoryComponent,
+        "battery": batteryComponent,
+        "network": networkComponent,
+        "notifications": notificationsComponent
+    })
+
+    Component { id: workspaceIndicatorComponent; WorkspaceIndicator {} }
+    Component { id: clockComponent; ClockWidget {} }
+    Component { id: cpuComponent; CpuWidget {} }
+    Component { id: memoryComponent; MemoryWidget {} }
+    Component { id: batteryComponent; BatteryWidget {} }
+    Component { id: networkComponent; NetworkWidget {} }
+    Component { id: notificationsComponent; NotificationsWidget {} }
+
+    // ----------------------------------------------------------------------
+    // Dispatch a parsed DaemonMessage into the state stores.
+    // ----------------------------------------------------------------------
+    function dispatchDaemonMessage(msg) {
+        if (!msg || !msg.type) return;
+        switch (msg.type) {
+        case "widget_update": {
+            const id = msg.widget_id;
+            // Route the command-palette widget into the dedicated
+            // overlay state instead of the bar widget store.
+            if (id === "command-palette") {
+                shell.paletteState = msg.state || { open: false, query: "", results: [] };
+                break;
+            }
+            const s = Object.assign({}, shell.widgetStates);
+            s[id] = msg.state || {};
+            shell.widgetStates = s;
+
+            const st = Object.assign({}, shell.widgetStatuses);
+            st[id] = msg.status || "normal";
+            shell.widgetStatuses = st;
+            break;
+        }
+        case "widget_visibility": {
+            const v = Object.assign({}, shell.widgetVisibility);
+            v[msg.widget_id] = {
+                visible: msg.visible,
+                prominence: msg.prominence || "visible"
+            };
+            shell.widgetVisibility = v;
+            break;
+        }
+        case "bar_layout": {
+            shell.barLayout = {
+                left: msg.left || [],
+                center: msg.center || [],
+                right: msg.right || []
+            };
+            break;
+        }
+        default:
+            // Unknown message types (e.g. a future Theme variant) are
+            // silently ignored. The daemon's non_exhaustive enums are
+            // designed for forward-compat; the shell matches that.
+            break;
+        }
+    }
+
+    function prominenceFor(widgetId) {
+        const v = shell.widgetVisibility[widgetId];
+        if (!v) return "visible";
+        if (!v.visible) return "hidden";
+        return v.prominence || "visible";
+    }
+
+    function statusFor(widgetId) {
+        return shell.widgetStatuses[widgetId] || "normal";
+    }
+
+    function stateFor(widgetId) {
+        return shell.widgetStates[widgetId] || null;
+    }
+
+    function componentFor(widgetId) {
+        return shell.widgetRegistry[widgetId] || null;
+    }
+
+    // ----------------------------------------------------------------------
+    // PanelWindow — one top-edge bar per screen.
     // ----------------------------------------------------------------------
     Variants {
         model: Quickshell.screens
         delegate: PanelWindow {
+            id: panel
             required property var modelData
             screen: modelData
 
@@ -58,141 +162,206 @@ Scope {
                 left: true
                 right: true
             }
-            implicitHeight: 30
+            // Full-density bar height per spec §5.2. Density modes
+            // (compact/hidden) will be wired to this in a later phase.
+            implicitHeight: Theme.barHeightFull
+            // The bar itself uses `surface` per §3.2 — not `bg`, which
+            // is the desktop layer behind the bar.
+            color: Theme.surface
 
-            color: "#1e1e2e"
-
-            Row {
+            // Inner-shadow contrast floor — §3.2.1. A 1-2px dark strip
+            // along the bar's bottom edge provides a subtle but
+            // guaranteed contrast anchor even against bright wallpapers
+            // (matters more once blur mode lands).
+            Rectangle {
                 anchors.left: parent.left
-                anchors.leftMargin: 12
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 1
+                color: Theme.bgDark
+                opacity: 0.30
+            }
+
+            // Left zone.
+            Row {
+                id: leftZone
+                anchors.left: parent.left
+                anchors.leftMargin: Theme.spaceLg
                 anchors.verticalCenter: parent.verticalCenter
-                spacing: 12
+                spacing: Theme.interWidgetGapFull
 
                 Repeater {
-                    model: shell.workspaces
-                    delegate: Rectangle {
+                    model: shell.barLayout.left
+                    delegate: Loader {
                         required property var modelData
-                        width: label.implicitWidth + 14
-                        height: 22
-                        radius: 4
-                        color: modelData.focused ? "#7aa2f7" : "#313244"
-                        Text {
-                            id: label
-                            anchors.centerIn: parent
-                            color: modelData.focused ? "#1e1e2e" : "#cdd6f4"
-                            text: modelData.name
-                            font.family: "monospace"
-                            font.pointSize: 10
-                            font.bold: modelData.focused
+                        sourceComponent: shell.componentFor(modelData)
+                        onLoaded: {
+                            if (!item) return;
+                            item.widgetState = Qt.binding(() => shell.stateFor(modelData));
+                            item.status = Qt.binding(() => shell.statusFor(modelData));
+                            item.prominence = Qt.binding(() => shell.prominenceFor(modelData));
                         }
                     }
                 }
             }
 
-            Text {
-                anchors.centerIn: parent
-                color: "#a6adc8"
-                text: shell.focusedWindow
-                font.family: "monospace"
-                font.pointSize: 10
-                elide: Text.ElideRight
-                width: parent.width / 3
-                horizontalAlignment: Text.AlignHCenter
+            // Center zone.
+            Row {
+                id: centerZone
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: Theme.interWidgetGapFull
+
+                Repeater {
+                    model: shell.barLayout.center
+                    delegate: Loader {
+                        required property var modelData
+                        sourceComponent: shell.componentFor(modelData)
+                        onLoaded: {
+                            if (!item) return;
+                            item.widgetState = Qt.binding(() => shell.stateFor(modelData));
+                            item.status = Qt.binding(() => shell.statusFor(modelData));
+                            item.prominence = Qt.binding(() => shell.prominenceFor(modelData));
+                        }
+                    }
+                }
             }
 
-            Text {
+            // Right zone.
+            Row {
+                id: rightZone
                 anchors.right: parent.right
-                anchors.rightMargin: 12
+                anchors.rightMargin: Theme.spaceLg
                 anchors.verticalCenter: parent.verticalCenter
-                color: "#cdd6f4"
-                text: "levshell"
-                font.family: "monospace"
-                font.pointSize: 10
+                spacing: Theme.interWidgetGapFull
+
+                Repeater {
+                    model: shell.barLayout.right
+                    delegate: Loader {
+                        required property var modelData
+                        sourceComponent: shell.componentFor(modelData)
+                        onLoaded: {
+                            if (!item) return;
+                            item.widgetState = Qt.binding(() => shell.stateFor(modelData));
+                            item.status = Qt.binding(() => shell.statusFor(modelData));
+                            item.prominence = Qt.binding(() => shell.prominenceFor(modelData));
+                        }
+                    }
+                }
             }
         }
     }
 
     // ----------------------------------------------------------------------
-    // IPC socket — pulls DaemonMessage frames from the daemon and updates
-    // the bound state above.
+    // Shell → daemon helpers.
+    // Each wraps `daemonSocket.write()` with a JSON-encoded ShellMessage.
+    // ----------------------------------------------------------------------
+    function sendShellMessage(obj) {
+        try {
+            daemonSocket.write(JSON.stringify(obj) + "\n");
+            daemonSocket.flush();
+        } catch (e) {
+            console.warn("levshell: failed to send shell message:", e);
+        }
+    }
+
+    function sendPaletteQuery(query) {
+        shell.sendShellMessage({
+            type: "command_palette_query",
+            query: query
+        });
+    }
+
+    function sendPaletteSelect(provider, itemId) {
+        shell.sendShellMessage({
+            type: "command_palette_select",
+            provider: provider,
+            item_id: itemId
+        });
+    }
+
+    function sendPaletteClose() {
+        shell.sendShellMessage({ type: "command_palette_close" });
+    }
+
+    // ----------------------------------------------------------------------
+    // Command-palette overlay window.
+    //
+    // A second PanelWindow that becomes visible when paletteState.open
+    // goes true. Uses WlrLayershell.keyboardFocus = Exclusive so key
+    // events reach the TextInput inside CommandPalette.
+    // ----------------------------------------------------------------------
+    PanelWindow {
+        id: paletteWindow
+        visible: shell.paletteState.open === true
+
+        WlrLayershell.layer: WlrLayer.Overlay
+        WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
+        WlrLayershell.namespace: "levshell-palette"
+
+        anchors {
+            top: true
+            left: true
+            right: true
+            bottom: true
+        }
+        color: "transparent"
+
+        // Click-outside to close: a transparent full-screen rectangle
+        // under the palette that dismisses on any click that didn't
+        // land on the palette itself.
+        MouseArea {
+            anchors.fill: parent
+            onClicked: shell.sendPaletteClose()
+        }
+
+        CommandPalette {
+            id: paletteOverlay
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.top: parent.top
+            anchors.topMargin: Theme.barHeightFull + Theme.spaceLg
+            paletteData: shell.paletteState
+            onQueryChanged: (text) => shell.sendPaletteQuery(text)
+            onSelect: (provider, itemId) => shell.sendPaletteSelect(provider, itemId)
+            onClose: () => shell.sendPaletteClose()
+        }
+    }
+
+    // ----------------------------------------------------------------------
+    // IPC socket: sends Hello on connect, parses NDJSON frames, dispatches.
     // ----------------------------------------------------------------------
     Socket {
         id: daemonSocket
         path: Quickshell.env("XDG_RUNTIME_DIR") + "/levshell.sock"
         connected: true
 
-        // Rolling buffer + framing state. JavaScript's typed arrays handle
-        // the binary side; the parsed payload is converted to a string for
-        // JSON.parse below.
-        property var buffer: new Uint8Array(0)
-        property int expectedLen: -1
-
-        // The exact signal Quickshell exposes for raw socket reads has varied
-        // by release. Adjust the handler name if your Quickshell build emits
-        // a different signal — the framing logic is independent.
-        onTextRead: function(text) {
-            // Some Quickshell builds deliver pre-decoded UTF-8; if so, the
-            // wire format here would have to be NDJSON instead of length-
-            // prefixed binary. Phase 0 ships length-prefixed binary, so this
-            // branch is intentionally a no-op.
-        }
-
         onConnectionStateChanged: {
             if (connected) {
                 console.log("levshell: connected to daemon socket");
+                // Identify as the shell. PROTOCOL_VERSION lives in
+                // crates/levshell-ipc/src/handshake.rs.
+                const hello = JSON.stringify({
+                    type: "hello",
+                    role: "shell",
+                    protocol_version: 1
+                });
+                daemonSocket.write(hello + "\n");
+                daemonSocket.flush();
             } else {
                 console.log("levshell: daemon socket disconnected");
             }
         }
 
-        // Pull frames out of the rolling buffer until we run out of complete
-        // ones, then return.
-        function pumpFrames() {
-            while (true) {
-                if (daemonSocket.expectedLen < 0) {
-                    if (daemonSocket.buffer.length < 4) {
-                        return;
-                    }
-                    const b = daemonSocket.buffer;
-                    daemonSocket.expectedLen =
-                        (b[0] << 24 >>> 0) +
-                        (b[1] << 16 >>> 0) +
-                        (b[2] << 8 >>> 0) +
-                        (b[3] >>> 0);
-                    daemonSocket.buffer = daemonSocket.buffer.slice(4);
-                }
-                if (daemonSocket.buffer.length < daemonSocket.expectedLen) {
-                    return;
-                }
-                const payload = daemonSocket.buffer.slice(0, daemonSocket.expectedLen);
-                daemonSocket.buffer = daemonSocket.buffer.slice(daemonSocket.expectedLen);
-                daemonSocket.expectedLen = -1;
-
-                let text = "";
-                for (let i = 0; i < payload.length; ++i) {
-                    text += String.fromCharCode(payload[i]);
-                }
+        parser: SplitParser {
+            splitMarker: "\n"
+            onRead: (segment) => {
                 try {
-                    const obj = JSON.parse(text);
+                    const obj = JSON.parse(segment);
                     shell.dispatchDaemonMessage(obj);
                 } catch (e) {
-                    console.warn("levshell: failed to parse frame:", e);
+                    console.warn("levshell: failed to parse frame:", e, "segment:", segment);
                 }
             }
         }
-    }
-
-    // Dispatch a parsed DaemonMessage to the bar's state.
-    function dispatchDaemonMessage(msg) {
-        if (msg.type !== "widget_update") {
-            return;
-        }
-        if (msg.widget_id !== "workspace-indicator") {
-            return;
-        }
-        const state = msg.state || {};
-        shell.activeWorkspace = state.active || "—";
-        shell.focusedWindow = state.focused_window || "";
-        shell.workspaces = state.workspaces || [];
     }
 }
