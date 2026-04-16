@@ -8,11 +8,15 @@
 //!
 //! [`DataStore`]: crate::store::DataStore
 
+mod events;
+mod experiments;
+mod flashcards;
 mod notes;
 mod projects;
 mod refs;
 mod search;
 mod sync_metadata;
 mod tags;
+mod tasks;
 
 pub use search::{NoteSearchHit, ReferenceSearchHit};

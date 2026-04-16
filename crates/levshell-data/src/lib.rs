@@ -15,9 +15,12 @@ mod store;
 
 pub use error::{DataError, Result};
 pub use models::{
-    DataSource, EntityType, Event, Experiment, ExperimentStatus, Flashcard, ListNotes,
-    ListProjects, NewNote, NewProject, NewReference, Note, NotePatch, Project, ProjectPatch,
-    ProjectStatus, Reference, SyncDirection, SyncMetadata, Task, TaskPriority, TaskStatus,
+    DataSource, EntityType, Event, EventPatch, Experiment, ExperimentPatch, ExperimentStatus,
+    Flashcard, FlashcardPatch, ListEvents, ListExperiments, ListFlashcards, ListNotes,
+    ListProjects, ListReferences, ListTasks, NewEvent, NewExperiment, NewFlashcard, NewNote,
+    NewProject, NewReference, NewTask, Note, NotePatch, Project, ProjectPatch, ProjectStatus,
+    Reference, ReferencePatch, SyncDirection, SyncMetadata, Task, TaskPatch, TaskPriority,
+    TaskStatus,
 };
 pub use ops::{NoteSearchHit, ReferenceSearchHit};
 pub use store::DataStore;

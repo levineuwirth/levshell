@@ -237,6 +237,40 @@ pub struct NewReference {
     pub project_id: Option<Uuid>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ReferencePatch {
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub authors: Option<Vec<String>>,
+    #[serde(default)]
+    pub year: Option<Option<i32>>,
+    #[serde(default)]
+    pub venue: Option<Option<String>>,
+    #[serde(default)]
+    pub doi: Option<Option<String>>,
+    #[serde(default)]
+    pub citekey: Option<String>,
+    #[serde(default)]
+    pub abstract_text: Option<Option<String>>,
+    #[serde(default)]
+    pub pdf_path: Option<Option<String>>,
+    #[serde(default)]
+    pub reading_progress: Option<Option<f64>>,
+    #[serde(default)]
+    pub annotations: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<Option<Uuid>>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ListReferences {
+    pub limit: Option<u32>,
+    pub offset: Option<u32>,
+    pub project_id: Option<Uuid>,
+    pub tag: Option<String>,
+}
+
 // ---------------------------------------------------------------------------
 // Flashcard
 // ---------------------------------------------------------------------------
@@ -258,6 +292,63 @@ pub struct Flashcard {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewFlashcard {
+    pub front: String,
+    pub back: String,
+    #[serde(default)]
+    pub linked_note_id: Option<Uuid>,
+    #[serde(default)]
+    pub linked_ref_id: Option<Uuid>,
+    #[serde(default)]
+    pub project_id: Option<Uuid>,
+    #[serde(default = "default_interval")]
+    pub interval_days: f64,
+    #[serde(default = "default_ease")]
+    pub ease_factor: f64,
+    pub due_at: DateTime<Utc>,
+}
+
+fn default_interval() -> f64 {
+    1.0
+}
+fn default_ease() -> f64 {
+    2.5
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FlashcardPatch {
+    #[serde(default)]
+    pub front: Option<String>,
+    #[serde(default)]
+    pub back: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked_note_id: Option<Option<Uuid>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked_ref_id: Option<Option<Uuid>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<Option<Uuid>>,
+    #[serde(default)]
+    pub interval_days: Option<f64>,
+    #[serde(default)]
+    pub ease_factor: Option<f64>,
+    #[serde(default)]
+    pub due_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub review_count: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_reviewed: Option<Option<DateTime<Utc>>>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ListFlashcards {
+    pub limit: Option<u32>,
+    pub offset: Option<u32>,
+    pub project_id: Option<Uuid>,
+    pub due_before: Option<DateTime<Utc>>,
+    pub tag: Option<String>,
+}
+
 // ---------------------------------------------------------------------------
 // Event (calendar)
 // ---------------------------------------------------------------------------
@@ -276,6 +367,57 @@ pub struct Event {
     pub reminders: Vec<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewEvent {
+    pub title: String,
+    pub start_at: DateTime<Utc>,
+    pub end_at: DateTime<Utc>,
+    #[serde(default)]
+    pub location: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub project_id: Option<Uuid>,
+    #[serde(default)]
+    pub recurrence: Option<String>,
+    #[serde(default)]
+    pub reminders: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EventPatch {
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub start_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub end_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<Option<Uuid>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recurrence: Option<Option<String>>,
+    #[serde(default)]
+    pub reminders: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ListEvents {
+    pub limit: Option<u32>,
+    pub offset: Option<u32>,
+    pub project_id: Option<Uuid>,
+    pub after: Option<DateTime<Utc>>,
+    pub before: Option<DateTime<Utc>>,
+    pub tag: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -366,6 +508,46 @@ pub struct Task {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewTask {
+    pub title: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub status: TaskStatus,
+    #[serde(default)]
+    pub priority: Option<TaskPriority>,
+    #[serde(default)]
+    pub due_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub project_id: Option<Uuid>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TaskPatch {
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<Option<String>>,
+    #[serde(default)]
+    pub status: Option<TaskStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<Option<TaskPriority>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub due_at: Option<Option<DateTime<Utc>>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<Option<Uuid>>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ListTasks {
+    pub limit: Option<u32>,
+    pub offset: Option<u32>,
+    pub project_id: Option<Uuid>,
+    pub status: Option<TaskStatus>,
+    pub tag: Option<String>,
+}
+
 // ---------------------------------------------------------------------------
 // Experiment
 // ---------------------------------------------------------------------------
@@ -422,6 +604,57 @@ pub struct Experiment {
     pub completed_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewExperiment {
+    pub name: String,
+    pub project_id: Uuid,
+    #[serde(default)]
+    pub hypothesis: Option<String>,
+    #[serde(default)]
+    pub status: ExperimentStatus,
+    #[serde(default)]
+    pub host: Option<String>,
+    #[serde(default)]
+    pub git_hash: Option<String>,
+    #[serde(default)]
+    pub config: Option<serde_json::Value>,
+    #[serde(default)]
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ExperimentPatch {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hypothesis: Option<Option<String>>,
+    #[serde(default)]
+    pub status: Option<ExperimentStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_hash: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<Option<serde_json::Value>>,
+    #[serde(default)]
+    pub metrics: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<Option<DateTime<Utc>>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<Option<DateTime<Utc>>>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ListExperiments {
+    pub limit: Option<u32>,
+    pub offset: Option<u32>,
+    pub project_id: Option<Uuid>,
+    pub status: Option<ExperimentStatus>,
+    pub tag: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
