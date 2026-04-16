@@ -11,11 +11,16 @@
 #![forbid(unsafe_code)]
 
 pub mod context_engine;
+pub mod ideation;
 pub mod palette;
 pub mod sway;
 pub mod telemetry;
 
 pub use context_engine::{default_context_engine, default_widgets, ContextEngineModule};
+pub use ideation::{
+    IdeationConfig, IdeationConfigError, IdeationModule, Nudge, NudgeContext, NudgeKind,
+    NudgeSelector, NudgeWeights, RecentEntity,
+};
 pub use palette::{
     AppLauncherProvider, NoteSearchProvider, PaletteItem, PaletteModule, PaletteProvider,
     PaletteState, WorkspaceSwitcherProvider, PALETTE_WIDGET_ID, PALETTE_WIDGET_TYPE,

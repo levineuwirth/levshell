@@ -133,7 +133,7 @@ async fn daemon_publishes_widget_update_over_ipc_to_a_unixstream_shell() {
             projects_dir: None,
     };
 
-    let factory: ModuleFactory = Box::new(|bus, publisher, _store| {
+    let factory: ModuleFactory = Box::new(|bus, publisher, _store, _projects| {
         vec![Box::new(FakeModule { bus, publisher }) as Box<dyn Module>]
     });
 
@@ -205,7 +205,7 @@ async fn daemon_publishes_widget_update_over_ipc_to_a_unixstream_shell() {
 // ---------------------------------------------------------------------------
 
 fn empty_factory() -> ModuleFactory {
-    Box::new(|_bus, _publisher, _store| Vec::new())
+    Box::new(|_bus, _publisher, _store, _projects| Vec::new())
 }
 
 /// Boot the daemon with a given factory, return the daemon task handle, the
@@ -350,7 +350,7 @@ async fn ctl_and_shell_coexist_with_shell_receiving_updates() {
         publisher_capacity: 16,
             projects_dir: None,
     };
-    let factory: ModuleFactory = Box::new(|bus, publisher, _store| {
+    let factory: ModuleFactory = Box::new(|bus, publisher, _store, _projects| {
         vec![Box::new(FakeModule { bus, publisher }) as Box<dyn Module>]
     });
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
@@ -403,7 +403,7 @@ async fn memory_module_publishes_initial_widget_update_over_ipc() {
         publisher_capacity: 64,
             projects_dir: None,
     };
-    let factory: ModuleFactory = Box::new(|_bus, publisher, _store| {
+    let factory: ModuleFactory = Box::new(|_bus, publisher, _store, _projects| {
         vec![Box::new(MemoryModule::new(publisher)) as Box<dyn Module>]
     });
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
@@ -502,7 +502,7 @@ async fn context_engine_publishes_initial_bar_layout_on_shell_connect() {
         publisher_capacity: 64,
             projects_dir: None,
     };
-    let factory: ModuleFactory = Box::new(|_bus, publisher, _store| {
+    let factory: ModuleFactory = Box::new(|_bus, publisher, _store, _projects| {
         vec![Box::new(default_context_engine(publisher)) as Box<dyn Module>]
     });
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
@@ -556,7 +556,7 @@ async fn ctl_density_change_triggers_context_engine_republish() {
         publisher_capacity: 64,
             projects_dir: None,
     };
-    let factory: ModuleFactory = Box::new(|_bus, publisher, _store| {
+    let factory: ModuleFactory = Box::new(|_bus, publisher, _store, _projects| {
         let rule = CompiledRule::new(
             "notifications",
             parse_expression(r#"bar.density == "compact""#).unwrap(),
@@ -677,7 +677,7 @@ async fn ctl_palette_open_publishes_widget_update_with_results() {
         publisher_capacity: 64,
             projects_dir: None,
     };
-    let factory: ModuleFactory = Box::new(|_bus, publisher, _store| {
+    let factory: ModuleFactory = Box::new(|_bus, publisher, _store, _projects| {
         let palette = PaletteModule::new(publisher)
             .with_provider(Box::new(StubPaletteProvider));
         vec![Box::new(palette) as Box<dyn Module>]

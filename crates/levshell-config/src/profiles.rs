@@ -223,11 +223,19 @@ pub fn default_sync_dir() -> Option<PathBuf> {
     levshell_config_base().map(|b| b.join("sync"))
 }
 
-fn levshell_config_base() -> Option<PathBuf> {
+/// Base configuration directory: `$XDG_CONFIG_HOME/levshell` or
+/// `~/.config/levshell`. Returns `None` if neither env var is set.
+/// Use this for single-file configs that don't live under `sync/`,
+/// `profiles/`, or `projects/` (e.g. `ideation.toml`).
+pub fn default_config_base() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
     Some(base.join("levshell"))
+}
+
+fn levshell_config_base() -> Option<PathBuf> {
+    default_config_base()
 }
 
 #[cfg(test)]

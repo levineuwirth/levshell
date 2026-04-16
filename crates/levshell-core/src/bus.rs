@@ -112,6 +112,21 @@ pub enum Event {
     /// event surfaces the failure so health widgets and logging modules
     /// can react.
     SyncError { provider: String, error: String },
+
+    /// The ideation engine delivered a nudge (spec §2.2). `kind` is a
+    /// stringly-typed label matching one of
+    /// `"open_question"` / `"cross_connection"` / `"blocked_escalation"`
+    /// — kept as `String` so `levshell-core` stays a leaf crate with no
+    /// knowledge of the ideation module's internal enum.
+    ///
+    /// Listeners that actually deliver the nudge to the user (shell
+    /// overlay, freedesktop notification) subscribe to this event; the
+    /// ideation module itself only picks candidates and publishes.
+    NudgeDelivered {
+        project_id: Uuid,
+        kind: String,
+        title: String,
+    },
 }
 
 /// A discriminant for filtering subscriptions without instantiating an [`Event`].
@@ -130,6 +145,7 @@ pub enum EventKind {
     SyncCompleted,
     SyncConflict,
     SyncError,
+    NudgeDelivered,
 }
 
 impl Event {
@@ -147,6 +163,7 @@ impl Event {
             Event::SyncCompleted { .. } => EventKind::SyncCompleted,
             Event::SyncConflict { .. } => EventKind::SyncConflict,
             Event::SyncError { .. } => EventKind::SyncError,
+            Event::NudgeDelivered { .. } => EventKind::NudgeDelivered,
         }
     }
 }

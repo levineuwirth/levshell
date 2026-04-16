@@ -14,14 +14,19 @@ levshell-data.workspace = true
 levshell-config.workspace = true
 levshell-context.workspace = true
 levshell-ipc.workspace = true
+levshell-projects.workspace = true
+chrono.workspace = true
+rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+toml.workspace = true
 tracing.workspace = true
 async-trait.workspace = true
 futures-util.workspace = true
 swayipc-async.workspace = true
 tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
+uuid.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

@@ -11,9 +11,9 @@ use anyhow::Result;
 use levshell_config::{load_profiles_from_dir, spawn_profile_watcher};
 use levshell_daemon::{init_tracing, run_with_sync, DaemonConfig, ModuleFactory, SyncAdapterFactory};
 use levshell_modules::{
-    default_context_engine, AppLauncherProvider, BatteryModule, CpuModule, MemoryModule,
-    NetworkModule, NoteSearchProvider, PaletteModule, PaletteProvider, SwayWorkspaceModule,
-    WorkspaceSwitcherProvider,
+    default_context_engine, AppLauncherProvider, BatteryModule, CpuModule, IdeationModule,
+    MemoryModule, NetworkModule, NoteSearchProvider, PaletteModule, PaletteProvider,
+    SwayWorkspaceModule, WorkspaceSwitcherProvider,
 };
 use levshell_sync::{
     ObsidianAdapter, ObsidianConfig, ObsidianConfigWatcher, SyncAdapter, ZoteroAdapter,
@@ -66,28 +66,51 @@ async fn main() -> Result<()> {
         None => None,
     };
 
+    // Load the ideation engine's config up front so the factory
+    // closure stays sync and the load failure path is logged once,
+    // not per shell connection. Missing `ideation.toml` is normal —
+    // the engine starts with defaults.
+    let ideation_config = levshell_config::default_config_base()
+        .map(|dir| IdeationModule::load_config_from_dir(&dir))
+        .unwrap_or_default();
+    tracing::info!(
+        lambda_min = ideation_config.lambda_minutes,
+        tick_secs = ideation_config.tick_secs,
+        enabled = ideation_config.enabled,
+        "ideation engine config loaded"
+    );
+
     let factory: ModuleFactory = {
         let shared_profiles = shared_profiles.clone();
-        Box::new(move |bus, publisher, store| {
+        let ideation_config = ideation_config.clone();
+        Box::new(move |bus, publisher, store, projects| {
             let context_engine = default_context_engine(publisher.clone())
                 .with_shared_profiles(shared_profiles);
             let palette_providers: Vec<Box<dyn PaletteProvider>> = vec![
                 Box::new(AppLauncherProvider::new()),
                 Box::new(WorkspaceSwitcherProvider::new()),
-                Box::new(NoteSearchProvider::new(store)),
+                Box::new(NoteSearchProvider::new(store.clone())),
             ];
             let palette =
                 PaletteModule::new(publisher.clone()).with_providers(palette_providers);
+            let ideation = IdeationModule::with_config(
+                bus.clone(),
+                publisher.clone(),
+                store,
+                projects,
+                ideation_config,
+            );
             vec![
                 Box::new(SwayWorkspaceModule::new(bus.clone(), publisher.clone()))
                     as Box<dyn levshell_core::Module>,
                 Box::new(context_engine) as Box<dyn levshell_core::Module>,
                 Box::new(CpuModule::new(publisher.clone())) as Box<dyn levshell_core::Module>,
                 Box::new(MemoryModule::new(publisher.clone())) as Box<dyn levshell_core::Module>,
-                Box::new(BatteryModule::new(bus, publisher.clone()))
+                Box::new(BatteryModule::new(bus.clone(), publisher.clone()))
                     as Box<dyn levshell_core::Module>,
                 Box::new(NetworkModule::new(publisher)) as Box<dyn levshell_core::Module>,
                 Box::new(palette) as Box<dyn levshell_core::Module>,
+                Box::new(ideation) as Box<dyn levshell_core::Module>,
             ]
         })
     };

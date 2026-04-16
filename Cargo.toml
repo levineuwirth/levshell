@@ -56,6 +56,9 @@ uuid = { version = "1.10", features = ["v7", "serde"] }
 config = { version = "0.14", default-features = false, features = ["toml"] }
 notify = "6"
 
+# Stochastic scheduling (ideation engine)
+rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
+
 # Internal crates (referenced by path so each crate inherits the workspace version)
 levshell-core    = { path = "crates/levshell-core",    version = "0.1.0" }
 levshell-data    = { path = "crates/levshell-data",    version = "0.1.0" }

@@ -116,8 +116,15 @@ pub fn init_tracing() {
 ///
 /// The `DataStore` handle is cheap to clone (`Arc<Mutex<Connection>>`
 /// internally); modules that don't need it can simply drop it.
-pub type ModuleFactory =
-    Box<dyn FnOnce(EventBus, WidgetPublisher, DataStore) -> Vec<Box<dyn Module>> + Send>;
+pub type ModuleFactory = Box<
+    dyn FnOnce(
+            EventBus,
+            WidgetPublisher,
+            DataStore,
+            Option<ProjectRegistry>,
+        ) -> Vec<Box<dyn Module>>
+        + Send,
+>;
 
 /// Type alias for the sync-adapter factory closure passed to
 /// [`run_with_sync`]. Called once at daemon startup (before any shell
@@ -348,8 +355,12 @@ pub async fn run_with_sync(
                             internal_shutdown_tx.take(),
                         );
 
-                        let modules =
-                            factory(bus.clone(), writer_task.publisher.clone(), store.clone());
+                        let modules = factory(
+                            bus.clone(),
+                            writer_task.publisher.clone(),
+                            store.clone(),
+                            projects.clone(),
+                        );
                         let mut r = ModuleRunner::new(bus.clone());
                         for module in modules {
                             r.register(module).await;
