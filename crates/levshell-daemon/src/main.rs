@@ -15,7 +15,10 @@ use levshell_modules::{
     NetworkModule, NoteSearchProvider, PaletteModule, PaletteProvider, SwayWorkspaceModule,
     WorkspaceSwitcherProvider,
 };
-use levshell_sync::{ObsidianAdapter, ObsidianConfig, ObsidianConfigWatcher, SyncAdapter};
+use levshell_sync::{
+    ObsidianAdapter, ObsidianConfig, ObsidianConfigWatcher, SyncAdapter, ZoteroAdapter,
+    ZoteroConfig, ZoteroConfigWatcher,
+};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -151,11 +154,62 @@ async fn main() -> Result<()> {
         _ => None,
     };
 
+    let zotero_adapter = sync_dir.as_deref().and_then(|dir| {
+        let path = dir.join("zotero.toml");
+        if !path.exists() {
+            tracing::debug!(path = %path.display(), "no zotero.toml found");
+            return None;
+        }
+        match ZoteroConfig::load_from(&path) {
+            Ok(cfg) => {
+                tracing::info!(
+                    database = %cfg.database_path.display(),
+                    poll_secs = cfg.poll_interval_secs,
+                    enabled = cfg.enabled,
+                    "registering zotero sync adapter"
+                );
+                Some(Arc::new(ZoteroAdapter::new(cfg)))
+            }
+            Err(e) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "failed to load zotero.toml; skipping adapter"
+                );
+                None
+            }
+        }
+    });
+
+    let _zotero_watcher = match (sync_dir.as_deref(), zotero_adapter.as_ref()) {
+        (Some(dir), Some(adapter)) => match ZoteroConfigWatcher::spawn(adapter.clone(), dir) {
+            Ok(w) => {
+                tracing::info!(
+                    dir = %dir.display(),
+                    "zotero config hot-reload watcher started"
+                );
+                Some(w)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "failed to start zotero config watcher; hot-reload disabled"
+                );
+                None
+            }
+        },
+        _ => None,
+    };
+
     let sync_factory: SyncAdapterFactory = {
-        let adapter = obsidian_adapter.clone();
+        let obsidian = obsidian_adapter.clone();
+        let zotero = zotero_adapter.clone();
         Box::new(move || {
             let mut adapters: Vec<Arc<dyn SyncAdapter>> = Vec::new();
-            if let Some(a) = adapter {
+            if let Some(a) = obsidian {
+                adapters.push(a);
+            }
+            if let Some(a) = zotero {
                 adapters.push(a);
             }
             adapters

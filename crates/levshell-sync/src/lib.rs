@@ -30,6 +30,7 @@
 pub mod adapter;
 pub mod engine;
 pub mod obsidian;
+pub mod zotero;
 
 pub use adapter::{
     Result, SyncAdapter, SyncConflict, SyncContext, SyncError, SyncReport, SyncStatus,
@@ -37,4 +38,7 @@ pub use adapter::{
 pub use engine::{SyncEngine, SyncEngineConfig, SyncEngineHandle};
 pub use obsidian::{
     ObsidianAdapter, ObsidianConfig, ObsidianConfigError, ObsidianConfigWatcher,
+};
+pub use zotero::{
+    ZoteroAdapter, ZoteroConfig, ZoteroConfigError, ZoteroConfigWatcher,
 };
