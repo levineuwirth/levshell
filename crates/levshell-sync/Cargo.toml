@@ -17,6 +17,7 @@ chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.10"
+toml.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
@@ -25,3 +26,4 @@ uuid.workspace = true
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "sync", "time", "macros", "test-util"] }
 tempfile = "3"
+toml.workspace = true

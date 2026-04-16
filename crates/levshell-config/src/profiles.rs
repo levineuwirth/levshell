@@ -138,10 +138,22 @@ pub fn load_profiles_from_dir(dir: &Path) -> Vec<Profile> {
 /// Default profiles directory: `$XDG_CONFIG_HOME/levshell/profiles` or
 /// `~/.config/levshell/profiles`. Returns `None` if neither env var is set.
 pub fn default_profiles_dir() -> Option<PathBuf> {
+    levshell_config_base().map(|b| b.join("profiles"))
+}
+
+/// Default sync-adapter configuration directory:
+/// `$XDG_CONFIG_HOME/levshell/sync` or `~/.config/levshell/sync`.
+/// Each adapter (Obsidian, Zotero, Anki, CalDAV, …) has its own file
+/// under this directory. Returns `None` if neither env var is set.
+pub fn default_sync_dir() -> Option<PathBuf> {
+    levshell_config_base().map(|b| b.join("sync"))
+}
+
+fn levshell_config_base() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(base.join("levshell").join("profiles"))
+    Some(base.join("levshell"))
 }
 
 #[cfg(test)]

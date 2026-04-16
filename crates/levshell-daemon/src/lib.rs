@@ -42,6 +42,7 @@ use levshell_ipc::{
     IpcConnection, IpcServer, JsonCodec, PaletteAction, ProfileAction, ShellMessage,
     StatusSnapshot, WidgetPublisher, PROTOCOL_VERSION,
 };
+use levshell_sync::{SyncAdapter, SyncEngine, SyncEngineHandle};
 use thiserror::Error;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -110,6 +111,14 @@ pub fn init_tracing() {
 pub type ModuleFactory =
     Box<dyn FnOnce(EventBus, WidgetPublisher, DataStore) -> Vec<Box<dyn Module>> + Send>;
 
+/// Type alias for the sync-adapter factory closure passed to
+/// [`run_with_sync`]. Called once at daemon startup (before any shell
+/// connects); the returned adapters are registered on a fresh
+/// [`SyncEngine`] which spawns one task per adapter. Returning an empty
+/// vector leaves sync disabled — the rest of the daemon is unaffected.
+pub type SyncAdapterFactory =
+    Box<dyn FnOnce() -> Vec<std::sync::Arc<dyn SyncAdapter>> + Send>;
+
 /// State shared between the accept loop and every ctl handler task. Cheap
 /// to clone because all fields are either `Arc` or atomic.
 #[derive(Clone)]
@@ -126,9 +135,26 @@ struct SharedState {
 /// `shutdown` is awaited concurrently with the rest of the loop. Production
 /// passes `tokio::signal::ctrl_c()`; tests pass a oneshot they trigger
 /// manually.
+///
+/// This entry point does not register any sync adapters. Callers that want
+/// external-tool integration (Obsidian, Zotero, …) use [`run_with_sync`]
+/// and pass a [`SyncAdapterFactory`].
 pub async fn run(
     config: DaemonConfig,
     factory: ModuleFactory,
+    shutdown: Pin<Box<dyn std::future::Future<Output = ()> + Send>>,
+) -> Result<()> {
+    run_with_sync(config, factory, None, shutdown).await
+}
+
+/// Daemon entry point that additionally registers sync adapters via the
+/// given [`SyncAdapterFactory`]. The sync engine starts before the IPC
+/// server and runs independently of shell connection state — syncs happen
+/// even if no shell is attached.
+pub async fn run_with_sync(
+    config: DaemonConfig,
+    factory: ModuleFactory,
+    sync_factory: Option<SyncAdapterFactory>,
     shutdown: Pin<Box<dyn std::future::Future<Output = ()> + Send>>,
 ) -> Result<()> {
     tracing::info!(
@@ -147,6 +173,11 @@ pub async fn run(
 
     // 2. Build the event bus.
     let bus = EventBus::new();
+
+    // 2b. Start the sync engine before binding the IPC server. Sync runs
+    // independently of shell connection state — the shell may come and go
+    // but the daemon keeps pulling from external sources.
+    let sync_handle = start_sync_engine(&store, &bus, sync_factory);
 
     // 3. Bind the IPC server.
     let server = IpcServer::bind(&config.socket_path)
@@ -321,6 +352,10 @@ pub async fn run(
     if let Some(r) = runner.take() {
         r.shutdown().await;
     }
+    if let Some(h) = sync_handle {
+        tracing::info!("waiting for sync adapters to finish in-flight syncs");
+        h.shutdown().await;
+    }
     if let Some(h) = writer_handle.take() {
         h.abort();
         let _ = h.await;
@@ -333,6 +368,30 @@ pub async fn run(
 
     tracing::info!("levshell-daemon stopped");
     Ok(())
+}
+
+/// Build a [`SyncEngine`] from the given factory and spawn it. Returns
+/// `None` if no factory was provided or the factory returned no adapters.
+fn start_sync_engine(
+    store: &DataStore,
+    bus: &EventBus,
+    sync_factory: Option<SyncAdapterFactory>,
+) -> Option<SyncEngineHandle> {
+    let factory = sync_factory?;
+    let adapters = factory();
+    if adapters.is_empty() {
+        tracing::info!("no sync adapters registered");
+        return None;
+    }
+    let mut engine = SyncEngine::new(store.clone(), bus.clone());
+    let count = adapters.len();
+    for adapter in adapters {
+        tracing::info!(provider = %adapter.name(), "registering sync adapter");
+        engine.register(adapter);
+    }
+    let handle = engine.spawn();
+    tracing::info!(count, "sync engine started");
+    Some(handle)
 }
 
 /// Spawn the shell-side reader task: drains [`ShellMessage`]s from the QML

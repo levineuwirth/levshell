@@ -16,7 +16,9 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use levshell_core::{Event, EventBus, EventKind, Module, ModuleResult};
-use levshell_daemon::{run, DaemonConfig, ModuleFactory};
+use levshell_daemon::{run, run_with_sync, DaemonConfig, ModuleFactory, SyncAdapterFactory};
+use levshell_data::{DataStore, ListNotes};
+use levshell_sync::{ObsidianAdapter, ObsidianConfig, SyncAdapter};
 use levshell_ipc::{
     BarDensity, ClientRole, CtlRequest, CtlResponse, DaemonMessage, Hello, IpcConnection,
     JsonCodec, ShellMessage, WidgetAction, WidgetPublisher, WidgetStatus, WidgetUpdate,
@@ -760,6 +762,132 @@ async fn ctl_palette_open_publishes_widget_update_with_results() {
         Duration::from_secs(3),
     )
     .await;
+
+    let _ = shutdown_tx.send(());
+    let _ = tokio::time::timeout(Duration::from_secs(3), handle)
+        .await
+        .expect("daemon to exit");
+}
+
+// ---------------------------------------------------------------------------
+// Sync adapter wiring (phase 2.3)
+// ---------------------------------------------------------------------------
+
+/// End-to-end: boot the daemon with an Obsidian adapter pointed at a
+/// tempdir vault. After the first sync tick, the daemon's own data store
+/// should contain notes corresponding to the vault files. Proves the
+/// adapter runs under real daemon lifecycle (startup → sync engine spawn
+/// → shutdown drains in-flight syncs).
+#[tokio::test]
+async fn daemon_runs_obsidian_adapter_against_tempdir_vault() {
+    let (_dir, db_path, socket_path) = temp_paths();
+
+    // Build a tempdir vault with two known files. The adapter will ingest
+    // them on its first tick.
+    let vault_dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        vault_dir.path().join("one.md"),
+        "---\ntitle: First Note\ntags: rust, shell\n---\nBody of one.",
+    )
+    .unwrap();
+    std::fs::write(
+        vault_dir.path().join("two.md"),
+        "# Plain\n\nNo frontmatter.",
+    )
+    .unwrap();
+
+    let config = DaemonConfig {
+        db_path: db_path.clone(),
+        socket_path: socket_path.clone(),
+        publisher_capacity: 16,
+    };
+    let factory = empty_factory();
+
+    // Poll every second so the first tick runs well within the test
+    // timeout. The adapter's first sync actually fires immediately after
+    // spawn — the poll_interval only gates subsequent ticks.
+    let vault_path = vault_dir.path().to_path_buf();
+    let sync_factory: SyncAdapterFactory = Box::new(move || {
+        let cfg = ObsidianConfig {
+            vault_path,
+            enabled: true,
+            poll_interval_secs: 1,
+            exclude_dirs: vec![".obsidian".into()],
+        };
+        vec![std::sync::Arc::new(ObsidianAdapter::new(cfg)) as std::sync::Arc<dyn SyncAdapter>]
+    });
+
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let shutdown: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
+        Box::pin(async move {
+            let _ = shutdown_rx.await;
+        });
+
+    let handle = tokio::spawn(async move {
+        run_with_sync(config, factory, Some(sync_factory), shutdown).await
+    });
+
+    wait_for_socket(&socket_path).await;
+
+    // Poll the data store until the first sync lands (or fail the test).
+    // Opening a second DataStore on the same WAL-mode SQLite file is fine
+    // — WAL permits concurrent readers and writers across connections.
+    let mut attempts = 0;
+    let notes = loop {
+        attempts += 1;
+        let store = DataStore::open(&db_path).await.expect("open store");
+        let notes = store
+            .list_notes(ListNotes::default())
+            .await
+            .expect("list notes");
+        drop(store);
+        if notes.len() == 2 {
+            break notes;
+        }
+        if attempts > 60 {
+            panic!("obsidian adapter never ingested vault files (got {} notes)", notes.len());
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+
+    let titles: std::collections::HashSet<_> = notes.iter().map(|n| n.title.as_str()).collect();
+    assert!(titles.contains("First Note"), "frontmatter title should win");
+    assert!(titles.contains("two"), "filename stem when no frontmatter");
+
+    let _ = shutdown_tx.send(());
+    let result = tokio::time::timeout(Duration::from_secs(5), handle)
+        .await
+        .expect("daemon to exit")
+        .expect("daemon task to join");
+    result.expect("daemon to return Ok");
+}
+
+/// Daemon boots and exits cleanly even when the sync factory returns no
+/// adapters. Covers the common case of a user with no sync TOML files.
+#[tokio::test]
+async fn daemon_boots_with_empty_sync_factory() {
+    let (_dir, db_path, socket_path) = temp_paths();
+    let config = DaemonConfig {
+        db_path,
+        socket_path: socket_path.clone(),
+        publisher_capacity: 16,
+    };
+
+    let sync_factory: SyncAdapterFactory = Box::new(Vec::new);
+
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let shutdown: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
+        Box::pin(async move {
+            let _ = shutdown_rx.await;
+        });
+    let handle = tokio::spawn(async move {
+        run_with_sync(config, empty_factory(), Some(sync_factory), shutdown).await
+    });
+    wait_for_socket(&socket_path).await;
+
+    // Sanity-check that the daemon is responsive.
+    let response = ctl_round_trip(&socket_path, CtlRequest::Ping).await;
+    assert!(matches!(response, CtlResponse::Pong));
 
     let _ = shutdown_tx.send(());
     let _ = tokio::time::timeout(Duration::from_secs(3), handle)

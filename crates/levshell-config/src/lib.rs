@@ -15,5 +15,6 @@
 pub mod profiles;
 
 pub use profiles::{
-    default_profiles_dir, load_profile_file, load_profiles_from_dir, ConfigError, ProfileFile,
+    default_profiles_dir, default_sync_dir, load_profile_file, load_profiles_from_dir, ConfigError,
+    ProfileFile,
 };

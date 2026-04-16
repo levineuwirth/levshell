@@ -53,7 +53,7 @@ use crate::adapter::{
     Result, SyncAdapter, SyncConflict, SyncContext, SyncError, SyncReport, SyncStatus,
 };
 
-pub use config::ObsidianConfig;
+pub use config::{ObsidianConfig, ObsidianConfigError};
 
 /// Provider name. Persisted in sync_metadata.provider rows — never change
 /// without a migration.
