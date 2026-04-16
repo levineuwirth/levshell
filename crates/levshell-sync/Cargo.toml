@@ -12,8 +12,15 @@ description = "Levshell sync engine and external-tool sync adapters (Obsidian, Z
 levshell-core.workspace = true
 levshell-data.workspace = true
 levshell-config.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-tokio = { workspace = true, features = ["rt", "sync", "time"] }
+tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
+uuid.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "sync", "time", "macros", "test-util"] }
+tempfile = "3"

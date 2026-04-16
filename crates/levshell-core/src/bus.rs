@@ -87,6 +87,31 @@ pub enum Event {
         provider: String,
         item_id: String,
     },
+
+    /// A sync adapter finished a sync pass successfully. Emitted by the
+    /// sync engine (`levshell-sync::SyncEngine`) after each adapter tick.
+    SyncCompleted {
+        provider: String,
+        upserted: u32,
+        deleted: u32,
+        conflicts: u32,
+        duration_ms: u64,
+    },
+
+    /// A sync adapter detected a conflict between local and external state
+    /// for a single entity. Emitted once per conflict; v1 applies
+    /// last-write-wins and leaves conflict surfacing to listening modules.
+    SyncConflict {
+        provider: String,
+        entity_type: String,
+        external_id: String,
+        reason: String,
+    },
+
+    /// A sync adapter failed. The adapter loop continues running; this
+    /// event surfaces the failure so health widgets and logging modules
+    /// can react.
+    SyncError { provider: String, error: String },
 }
 
 /// A discriminant for filtering subscriptions without instantiating an [`Event`].
@@ -102,6 +127,9 @@ pub enum EventKind {
     PaletteActionRequested,
     CommandPaletteQueryReceived,
     CommandPaletteSelectReceived,
+    SyncCompleted,
+    SyncConflict,
+    SyncError,
 }
 
 impl Event {
@@ -116,6 +144,9 @@ impl Event {
             Event::PaletteActionRequested { .. } => EventKind::PaletteActionRequested,
             Event::CommandPaletteQueryReceived { .. } => EventKind::CommandPaletteQueryReceived,
             Event::CommandPaletteSelectReceived { .. } => EventKind::CommandPaletteSelectReceived,
+            Event::SyncCompleted { .. } => EventKind::SyncCompleted,
+            Event::SyncConflict { .. } => EventKind::SyncConflict,
+            Event::SyncError { .. } => EventKind::SyncError,
         }
     }
 }
