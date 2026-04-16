@@ -29,6 +29,7 @@
 
 pub mod adapter;
 pub mod ankiconnect;
+pub mod caldav;
 pub mod engine;
 pub mod obsidian;
 pub mod zotero;
@@ -39,6 +40,10 @@ pub use adapter::{
 pub use ankiconnect::{
     AnkiClient, AnkiClientError, AnkiConnectAdapter, AnkiConnectConfig, AnkiConnectConfigError,
     AnkiConnectConfigWatcher, AnkiConnectHttpClient,
+};
+pub use caldav::{
+    CalDavAdapter, CalDavClient, CalDavConfig, CalDavConfigError, CalDavConfigWatcher,
+    CalDavError, CalDavHttpClient, CalendarSource, DavEntry,
 };
 pub use engine::{SyncEngine, SyncEngineConfig, SyncEngineHandle};
 pub use obsidian::{

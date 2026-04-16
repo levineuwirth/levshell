@@ -60,7 +60,11 @@ notify = "6"
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
 
 # HTTP client (AnkiConnect sync adapter — localhost only, no TLS needed)
-reqwest = { version = "0.12", default-features = false, features = ["json"] }
+# CalDAV needs rustls-tls-native-roots for real servers over HTTPS.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
+
+# iCalendar (.ics) parsing for the CalDAV sync adapter
+icalendar = "0.17"
 
 # Internal crates (referenced by path so each crate inherits the workspace version)
 levshell-core    = { path = "crates/levshell-core",    version = "0.1.0" }
