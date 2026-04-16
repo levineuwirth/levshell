@@ -36,6 +36,7 @@
 
 mod config;
 mod frontmatter;
+mod links;
 
 use std::collections::HashMap;
 use std::fs;
@@ -244,6 +245,10 @@ impl SyncAdapter for ObsidianAdapter {
             existing.into_iter().map(|m| (m.external_id.clone(), m)).collect();
 
         let mut report = SyncReport::default();
+        // Notes whose outgoing wiki-link edges need to be (re)populated
+        // after the main upsert pass — either new notes or existing
+        // notes whose content changed.
+        let mut link_updates: Vec<(Uuid, Vec<String>)> = Vec::new();
 
         for entry in &entries {
             let raw = match fs::read_to_string(&entry.absolute) {
@@ -264,6 +269,7 @@ impl SyncAdapter for ObsidianAdapter {
                 .title
                 .clone()
                 .unwrap_or_else(|| title_from_path(&entry.external_id));
+            let links = links::extract(body);
             let payload = Payload {
                 entry,
                 title,
@@ -275,32 +281,128 @@ impl SyncAdapter for ObsidianAdapter {
             let meta = by_external_id.remove(&entry.external_id);
             match meta {
                 None => {
-                    apply_insert(ctx, &payload, &mut report).await?;
+                    if let Some(id) = apply_insert(ctx, &payload, &mut report).await? {
+                        link_updates.push((id, links));
+                    }
                 }
                 Some(prev) => {
                     if prev.sync_hash.as_deref() == Some(payload.hash.as_str()) {
-                        // Unchanged; nothing to do.
+                        // Unchanged body → unchanged outgoing links.
                         continue;
                     }
-                    apply_update(ctx, &payload, &prev, &mut report).await?;
+                    if let Some(id) = apply_update(ctx, &payload, &prev, &mut report).await? {
+                        link_updates.push((id, links));
+                    }
                 }
             }
         }
 
         // Anything left in `by_external_id` no longer exists in the vault.
+        // Also strip its outgoing + incoming wiki-link edges so the graph
+        // never references ghost notes.
         for (_, stale) in by_external_id {
             apply_delete(ctx, &stale, &mut report).await?;
+        }
+
+        // Build a resolution index over the CURRENT vault's
+        // sync_metadata — the main loop may have inserted new rows
+        // since the snapshot above, so re-fetch. Index by exact
+        // external_id for path-prefixed links and by basename
+        // (filename stem) for bare links.
+        if !link_updates.is_empty() {
+            populate_wiki_link_edges(ctx, &link_updates).await?;
         }
 
         Ok(report)
     }
 }
 
+/// For every (source_note, raw_link_targets) pair, clear the source's
+/// existing outgoing `wiki_link` edges and add a fresh edge per
+/// resolved target. Targets that don't match any note are silently
+/// skipped (dangling references are a normal state in a vault — the
+/// user may be planning to create the target next).
+async fn populate_wiki_link_edges(
+    ctx: &SyncContext,
+    updates: &[(Uuid, Vec<String>)],
+) -> Result<()> {
+    let metas = ctx
+        .store
+        .list_sync_metadata_by_provider(PROVIDER_NAME)
+        .await?;
+
+    // Exact external_id lookup, e.g. [[research/paper]] → "research/paper.md".
+    let mut by_path: HashMap<String, Uuid> = HashMap::new();
+    // Basename lookup (filename without extension), e.g. [[paper]] → the
+    // first sync_metadata whose external_id ends with "paper.md". First
+    // insertion wins so the iteration order of sync_metadata determines
+    // collisions — acceptable for v1; users with name collisions can
+    // disambiguate with folder prefixes.
+    let mut by_basename: HashMap<String, Uuid> = HashMap::new();
+    for m in &metas {
+        by_path.insert(m.external_id.clone(), m.entity_id);
+        let basename = m
+            .external_id
+            .rsplit('/')
+            .next()
+            .unwrap_or(&m.external_id)
+            .trim_end_matches(".md");
+        by_basename.entry(basename.to_string()).or_insert(m.entity_id);
+    }
+
+    for (source_id, targets) in updates {
+        ctx.store
+            .clear_relations_from(*source_id, EntityType::Note, "wiki_link")
+            .await?;
+        for raw_target in targets {
+            let resolved = resolve_link_target(raw_target, &by_path, &by_basename);
+            if let Some(target_id) = resolved {
+                if target_id == *source_id {
+                    // Self-link: skip. Obsidian allows it but it
+                    // produces a degenerate self-loop in the graph.
+                    continue;
+                }
+                ctx.store
+                    .add_relation(
+                        *source_id,
+                        EntityType::Note,
+                        target_id,
+                        EntityType::Note,
+                        "wiki_link",
+                    )
+                    .await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn resolve_link_target(
+    raw: &str,
+    by_path: &HashMap<String, Uuid>,
+    by_basename: &HashMap<String, Uuid>,
+) -> Option<Uuid> {
+    // Try exact path match first, with and without the .md suffix
+    // (Obsidian users write `[[folder/note]]`, we stored
+    // `folder/note.md`).
+    if let Some(id) = by_path.get(raw) {
+        return Some(*id);
+    }
+    let with_ext = format!("{raw}.md");
+    if let Some(id) = by_path.get(&with_ext) {
+        return Some(*id);
+    }
+    // Fall back to basename lookup. Strip any trailing `.md` so both
+    // `[[foo]]` and `[[foo.md]]` resolve identically.
+    let basename = raw.trim_end_matches(".md");
+    by_basename.get(basename).copied()
+}
+
 async fn apply_insert(
     ctx: &SyncContext,
     payload: &Payload<'_>,
     report: &mut SyncReport,
-) -> Result<()> {
+) -> Result<Option<Uuid>> {
     let note = ctx
         .store
         .insert_note(NewNote {
@@ -324,7 +426,7 @@ async fn apply_insert(
         .await?;
 
     report.upserted += 1;
-    Ok(())
+    Ok(Some(note.id))
 }
 
 async fn apply_update(
@@ -332,15 +434,14 @@ async fn apply_update(
     payload: &Payload<'_>,
     prev: &SyncMetadata,
     report: &mut SyncReport,
-) -> Result<()> {
+) -> Result<Option<Uuid>> {
     let note = ctx.store.get_note(prev.entity_id).await?;
 
     let Some(note) = note else {
         // The sync_metadata row is orphaned — its entity disappeared via
         // `ON DELETE SET NULL` or a raw DELETE. Recreate instead of
         // chasing the ghost.
-        apply_insert(ctx, payload, report).await?;
-        return Ok(());
+        return apply_insert(ctx, payload, report).await;
     };
 
     // Conflict detection: if the local note was modified AFTER the last
@@ -379,7 +480,7 @@ async fn apply_update(
         .await?;
 
     report.upserted += 1;
-    Ok(())
+    Ok(Some(note.id))
 }
 
 async fn apply_delete(
@@ -387,6 +488,30 @@ async fn apply_delete(
     stale: &SyncMetadata,
     report: &mut SyncReport,
 ) -> Result<()> {
+    // Clear wiki-link edges in both directions before the row goes
+    // away so the graph never references a ghost note. Incoming edges
+    // (other notes that link to this one) will silently drop their
+    // dangling reference; the corresponding source notes re-emit
+    // their own outgoing edges on their next content change.
+    ctx.store
+        .clear_relations_from(stale.entity_id, EntityType::Note, "wiki_link")
+        .await?;
+    let incoming = ctx
+        .store
+        .list_relations_to(stale.entity_id, EntityType::Note)
+        .await?;
+    for edge in incoming {
+        ctx.store
+            .remove_relation(
+                edge.source_id,
+                edge.source_type,
+                edge.target_id,
+                edge.target_type,
+                edge.kind,
+            )
+            .await?;
+    }
+
     ctx.store.delete_note(stale.entity_id).await?;
     ctx.store
         .clear_sync_metadata(stale.entity_id, EntityType::Note, PROVIDER_NAME)

@@ -26,12 +26,14 @@
 //! detached (their `project_id` is `NOT NULL` in the schema — they
 //! always belong to exactly one project).
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
+use chrono::{DateTime, Utc};
 use levshell_config::{watch_config_dir, ConfigChange, ConfigWatcher, WatcherError};
-use levshell_core::EventBus;
+use levshell_core::{Event, EventBus, EventKind};
 use levshell_data::{
     DataStore, EntityType, EventPatch, FlashcardPatch, ListProjects, NewProject, NotePatch,
     Project, ProjectPatch, ProjectStatus, ReferencePatch, TaskPatch,
@@ -69,8 +71,10 @@ pub enum ProjectRegistryError {
     EntityNotFound,
 }
 
-/// Runtime metadata a project has beyond what lives in the `projects`
-/// table. Populated from TOML and indexed in-memory; not persisted.
+/// Configuration-sourced metadata a project has beyond what lives in
+/// the `projects` table. Populated from TOML and indexed in-memory;
+/// not persisted. This layer is *static* — it changes only on TOML
+/// hot-reload.
 #[derive(Debug, Clone, Default)]
 pub struct ProjectMetadata {
     pub tags: Vec<String>,
@@ -80,12 +84,46 @@ pub struct ProjectMetadata {
     pub accent_color: Option<String>,
 }
 
-/// The union of the DB-backed [`Project`] row and the TOML-only
-/// [`ProjectMetadata`]. What the registry hands out to callers.
+/// Session-scoped runtime state per spec §3.7: "which workspaces are
+/// currently associated with each project, accumulated focus time for
+/// the current session, and the last-active timestamp." These values
+/// are not persisted — they reset to defaults on daemon restart.
+///
+/// `accumulated_focus_time_secs` is wall-clock time while the project
+/// was the focused workspace's owner. `last_active_at` is the
+/// timestamp of the most recent transition into this project.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProjectRuntime {
+    pub last_active_at: Option<DateTime<Utc>>,
+    pub accumulated_focus_time_secs: u64,
+    pub currently_active_workspaces: BTreeSet<String>,
+}
+
+/// The union of the DB-backed [`Project`] row, TOML-sourced
+/// [`ProjectMetadata`], and session [`ProjectRuntime`] state. What
+/// the registry hands out to callers via [`ProjectRegistry::list`]
+/// and [`ProjectRegistry::get`].
 #[derive(Debug, Clone)]
 pub struct ProjectEntry {
     pub project: Project,
     pub metadata: ProjectMetadata,
+    pub runtime: ProjectRuntime,
+}
+
+/// Mutable stopwatch state: which project is currently accruing focus
+/// time, since when, from which workspace. Held in its own `Mutex`
+/// (not the main `RwLock<HashMap>`) so updates on each workspace
+/// change can be atomic without having to stall every reader.
+#[derive(Debug, Default)]
+struct FocusStopwatch {
+    current: Option<FocusTick>,
+}
+
+#[derive(Debug, Clone)]
+struct FocusTick {
+    project_id: Uuid,
+    workspace: String,
+    since: Instant,
 }
 
 /// Indexed, thread-safe access to the project set.
@@ -95,13 +133,14 @@ pub struct ProjectEntry {
 #[derive(Clone)]
 pub struct ProjectRegistry {
     store: DataStore,
-    // Event bus is held for future work (publishing ProjectActivated,
-    // ProjectAttached events so the context engine can react). Not yet
-    // used in v1.
-    #[allow(dead_code)]
     bus: EventBus,
     by_id: Arc<RwLock<HashMap<Uuid, ProjectEntry>>>,
     by_name: Arc<RwLock<HashMap<String, Uuid>>>,
+    /// Focus-time stopwatch. Updated atomically on every
+    /// `WorkspaceChanged` event; read whenever runtime state is
+    /// queried so the returned `accumulated_focus_time_secs` includes
+    /// any in-flight interval.
+    focus: Arc<Mutex<FocusStopwatch>>,
 }
 
 impl ProjectRegistry {
@@ -129,6 +168,7 @@ impl ProjectRegistry {
             bus,
             by_id: Arc::new(RwLock::new(HashMap::new())),
             by_name: Arc::new(RwLock::new(HashMap::new())),
+            focus: Arc::new(Mutex::new(FocusStopwatch::default())),
         };
         for file in files {
             registry.upsert_from_file(file).await?;
@@ -145,6 +185,7 @@ impl ProjectRegistry {
             bus,
             by_id: Arc::new(RwLock::new(HashMap::new())),
             by_name: Arc::new(RwLock::new(HashMap::new())),
+            focus: Arc::new(Mutex::new(FocusStopwatch::default())),
         }
     }
 
@@ -195,9 +236,21 @@ impl ProjectRegistry {
             accent_color: file.accent_color,
         };
 
+        // Preserve existing runtime state across hot-reload: the user
+        // editing `projects/foo.toml` shouldn't reset the focus
+        // counter they've been watching accumulate.
+        let runtime = {
+            let by_id = self.by_id.read().await;
+            by_id
+                .get(&project.id)
+                .map(|e| e.runtime.clone())
+                .unwrap_or_default()
+        };
+
         let entry = ProjectEntry {
             project: project.clone(),
             metadata,
+            runtime,
         };
         {
             let mut by_id = self.by_id.write().await;
@@ -386,6 +439,95 @@ impl ProjectRegistry {
             }
         }
         Ok(())
+    }
+
+    // ------------------------------------------------------------------
+    // Runtime metadata (§3.7): last_active_at, focus time, active
+    // workspaces.
+    // ------------------------------------------------------------------
+
+    /// Handle a focused-workspace change. Matches `workspace` against
+    /// every project's `metadata.workspace_names`; at most one project
+    /// wins. Side effects:
+    ///
+    /// - The outgoing project (if any) stops the stopwatch and
+    ///   accrues the elapsed interval to
+    ///   `accumulated_focus_time_secs`, then drops `workspace` from
+    ///   its `currently_active_workspaces`.
+    /// - The incoming project (if any) adds `workspace` to its set
+    ///   and updates `last_active_at`.
+    ///
+    /// If the workspace does not map to any project, the stopwatch
+    /// simply stops and no new project becomes active.
+    pub async fn handle_workspace_change(&self, workspace: &str) {
+        // Resolve target project via static workspace_names config.
+        let new_project = {
+            let by_id = self.by_id.read().await;
+            by_id
+                .values()
+                .find(|e| e.metadata.workspace_names.iter().any(|w| w == workspace))
+                .map(|e| e.project.id)
+        };
+
+        // Stop current stopwatch and roll the elapsed time into the
+        // outgoing project's runtime. Do this under a fresh write lock
+        // so we can mutate the entry in place.
+        let previous = {
+            let mut focus = self.focus.lock().expect("focus stopwatch poisoned");
+            focus.current.take()
+        };
+        if let Some(prev) = previous {
+            let elapsed = prev.since.elapsed().as_secs();
+            let mut by_id = self.by_id.write().await;
+            if let Some(entry) = by_id.get_mut(&prev.project_id) {
+                entry.runtime.accumulated_focus_time_secs =
+                    entry.runtime.accumulated_focus_time_secs.saturating_add(elapsed);
+                entry.runtime.currently_active_workspaces.remove(&prev.workspace);
+            }
+        }
+
+        // Start the new stopwatch and update the incoming project's
+        // runtime.
+        if let Some(pid) = new_project {
+            {
+                let mut by_id = self.by_id.write().await;
+                if let Some(entry) = by_id.get_mut(&pid) {
+                    entry.runtime.last_active_at = Some(Utc::now());
+                    entry
+                        .runtime
+                        .currently_active_workspaces
+                        .insert(workspace.to_string());
+                }
+            }
+            let mut focus = self.focus.lock().expect("focus stopwatch poisoned");
+            focus.current = Some(FocusTick {
+                project_id: pid,
+                workspace: workspace.to_string(),
+                since: Instant::now(),
+            });
+        }
+    }
+
+    /// Spawn a background task that subscribes to `WorkspaceChanged`
+    /// events on the bus and feeds each one into
+    /// [`Self::handle_workspace_change`]. Returns the join handle so
+    /// the daemon can abort it on shutdown.
+    pub fn spawn_workspace_watcher(&self) -> JoinHandle<()> {
+        // Capacity 32: Sway emits one WorkspaceChanged per focus
+        // switch, which is infrequent but can burst when the user
+        // mashes through workspaces with a super-fast keybind.
+        let mut rx =
+            self.bus
+                .subscribe("project-registry-workspace", [EventKind::WorkspaceChanged], 32);
+        let registry = self.clone();
+        tokio::spawn(async move {
+            while let Some(event) = rx.recv().await {
+                if let Event::WorkspaceChanged { name, .. } = event {
+                    registry.handle_workspace_change(&name).await;
+                }
+            }
+            tracing::debug!("project registry: workspace subscription closed");
+        })
     }
 }
 

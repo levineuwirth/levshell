@@ -19,8 +19,8 @@ pub use models::{
     Flashcard, FlashcardPatch, ListEvents, ListExperiments, ListFlashcards, ListNotes,
     ListProjects, ListReferences, ListTasks, NewEvent, NewExperiment, NewFlashcard, NewNote,
     NewProject, NewReference, NewTask, Note, NotePatch, Project, ProjectPatch, ProjectStatus,
-    Reference, ReferencePatch, SyncDirection, SyncMetadata, Task, TaskPatch, TaskPriority,
-    TaskStatus,
+    Reference, ReferencePatch, Relation, SyncDirection, SyncMetadata, Task, TaskPatch,
+    TaskPriority, TaskStatus,
 };
 pub use ops::{NoteSearchHit, ReferenceSearchHit};
 pub use store::DataStore;

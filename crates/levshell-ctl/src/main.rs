@@ -271,6 +271,16 @@ fn print_response(response: &CtlResponse) {
                 };
                 let color = p.accent_color.as_deref().unwrap_or("");
                 println!("{}  {}  {}{}  {}", p.id, p.status, p.name, tags, color);
+                let active = if p.currently_active_workspaces.is_empty() {
+                    "—".to_string()
+                } else {
+                    p.currently_active_workspaces.join(",")
+                };
+                let last = p.last_active_at.as_deref().unwrap_or("never");
+                println!(
+                    "    focus: {}s  last_active: {}  active_ws: {}",
+                    p.accumulated_focus_time_secs, last, active
+                );
             }
         }
         CtlResponse::Error { message } => {

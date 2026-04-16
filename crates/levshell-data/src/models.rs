@@ -658,6 +658,26 @@ pub struct ListExperiments {
 }
 
 // ---------------------------------------------------------------------------
+// Cross-entity relations (knowledge / citation graph)
+// ---------------------------------------------------------------------------
+
+/// One row of the polymorphic `entity_relations` table. Encodes a
+/// directed edge from a source entity to a target entity with a
+/// typed `kind` (e.g. `"wiki_link"`, `"cites"`, `"derived_from"`).
+/// The primary key `(source_id, source_type, target_id, target_type,
+/// relation_kind)` ensures edge identity is unique per kind — a
+/// repeated add is a no-op.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Relation {
+    pub source_id: Uuid,
+    pub source_type: EntityType,
+    pub target_id: Uuid,
+    pub target_type: EntityType,
+    pub kind: String,
+    pub created_at: DateTime<Utc>,
+}
+
+// ---------------------------------------------------------------------------
 // Provenance: DataSource and SyncMetadata
 // ---------------------------------------------------------------------------
 

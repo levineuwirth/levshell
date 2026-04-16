@@ -28,6 +28,11 @@ pub use config::{
     default_projects_dir, load_project_file, load_projects_from_dir, ProjectFile,
     ProjectRegistryConfigError,
 };
+
+// `load_project_file` is already re-exported above; this is a nudge to
+// keep the public surface deliberate. `ProjectRuntime` comes from the
+// registry module.
 pub use registry::{
     ProjectEntry, ProjectMetadata, ProjectRegistry, ProjectRegistryError, ProjectRegistryWatcher,
+    ProjectRuntime,
 };

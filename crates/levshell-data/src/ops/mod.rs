@@ -14,6 +14,7 @@ mod flashcards;
 mod notes;
 mod projects;
 mod refs;
+mod relations;
 mod search;
 mod sync_metadata;
 mod tags;

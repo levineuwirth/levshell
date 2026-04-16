@@ -12,8 +12,8 @@ use levshell_data::{
     DataStore, EntityType, EventPatch, ExperimentPatch, ExperimentStatus, FlashcardPatch,
     ListEvents, ListExperiments, ListFlashcards, ListNotes, ListProjects, ListReferences,
     ListTasks, NewEvent, NewExperiment, NewFlashcard, NewNote, NewProject, NewReference, NewTask,
-    NotePatch, ProjectPatch, ProjectStatus, ReferencePatch, SyncDirection, SyncMetadata, TaskPatch,
-    TaskPriority, TaskStatus,
+    NotePatch, ProjectPatch, ProjectStatus, ReferencePatch, Relation, SyncDirection, SyncMetadata,
+    TaskPatch, TaskPriority, TaskStatus,
 };
 
 async fn fresh_store() -> DataStore {
@@ -631,4 +631,124 @@ async fn experiment_requires_project_and_round_trips() {
     // ON DELETE CASCADE: deleting project removes experiments
     assert!(store.delete_project(project.id).await.unwrap());
     assert!(store.get_experiment(exp.id).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn entity_relations_add_list_remove_clear() {
+    let store = fresh_store().await;
+
+    // Three notes: a, b, c. We want edges a→b, a→c, and b→a.
+    let a = store
+        .insert_note(NewNote {
+            title: "a".into(),
+            content: "".into(),
+            project_id: None,
+        })
+        .await
+        .unwrap();
+    let b = store
+        .insert_note(NewNote {
+            title: "b".into(),
+            content: "".into(),
+            project_id: None,
+        })
+        .await
+        .unwrap();
+    let c = store
+        .insert_note(NewNote {
+            title: "c".into(),
+            content: "".into(),
+            project_id: None,
+        })
+        .await
+        .unwrap();
+
+    assert!(store
+        .add_relation(a.id, EntityType::Note, b.id, EntityType::Note, "wiki_link")
+        .await
+        .unwrap());
+    assert!(store
+        .add_relation(a.id, EntityType::Note, c.id, EntityType::Note, "wiki_link")
+        .await
+        .unwrap());
+    assert!(store
+        .add_relation(b.id, EntityType::Note, a.id, EntityType::Note, "wiki_link")
+        .await
+        .unwrap());
+
+    // Idempotent: re-adding returns false (no new row).
+    assert!(!store
+        .add_relation(a.id, EntityType::Note, b.id, EntityType::Note, "wiki_link")
+        .await
+        .unwrap());
+
+    // Outgoing from a: two edges to b and c.
+    let out_a: Vec<Relation> = store
+        .list_relations_from(a.id, EntityType::Note)
+        .await
+        .unwrap();
+    assert_eq!(out_a.len(), 2);
+    let targets: std::collections::HashSet<_> = out_a.iter().map(|r| r.target_id).collect();
+    assert!(targets.contains(&b.id));
+    assert!(targets.contains(&c.id));
+    assert!(out_a.iter().all(|r| r.kind == "wiki_link"));
+
+    // Incoming to a: just the edge from b.
+    let in_a: Vec<Relation> = store
+        .list_relations_to(a.id, EntityType::Note)
+        .await
+        .unwrap();
+    assert_eq!(in_a.len(), 1);
+    assert_eq!(in_a[0].source_id, b.id);
+
+    // Remove one specific edge.
+    assert!(store
+        .remove_relation(a.id, EntityType::Note, b.id, EntityType::Note, "wiki_link")
+        .await
+        .unwrap());
+    let out_a = store
+        .list_relations_from(a.id, EntityType::Note)
+        .await
+        .unwrap();
+    assert_eq!(out_a.len(), 1);
+    assert_eq!(out_a[0].target_id, c.id);
+
+    // A second remove of the same edge returns false.
+    assert!(!store
+        .remove_relation(a.id, EntityType::Note, b.id, EntityType::Note, "wiki_link")
+        .await
+        .unwrap());
+
+    // Clear all outgoing wiki_link edges from a.
+    let cleared = store
+        .clear_relations_from(a.id, EntityType::Note, "wiki_link")
+        .await
+        .unwrap();
+    assert_eq!(cleared, 1);
+    assert!(store
+        .list_relations_from(a.id, EntityType::Note)
+        .await
+        .unwrap()
+        .is_empty());
+
+    // clear_relations_from only targets the given kind.
+    store
+        .add_relation(a.id, EntityType::Note, b.id, EntityType::Note, "wiki_link")
+        .await
+        .unwrap();
+    store
+        .add_relation(a.id, EntityType::Note, b.id, EntityType::Note, "cites")
+        .await
+        .unwrap();
+    let cleared = store
+        .clear_relations_from(a.id, EntityType::Note, "wiki_link")
+        .await
+        .unwrap();
+    assert_eq!(cleared, 1, "only wiki_link edges should be cleared");
+    let remaining = store
+        .list_relations_from(a.id, EntityType::Note)
+        .await
+        .unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].kind, "cites");
 }

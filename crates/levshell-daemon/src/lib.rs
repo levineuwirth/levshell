@@ -211,6 +211,12 @@ pub async fn run_with_sync(
         None
     };
 
+    // If we have a registry, spin up the workspace watcher that tracks
+    // runtime state (last_active_at, focus-time accumulator, currently-
+    // active workspaces) per spec §3.7. The handle is kept alongside
+    // the other long-lived daemon tasks so shutdown aborts it cleanly.
+    let projects_workspace_task = projects.as_ref().map(|r| r.spawn_workspace_watcher());
+
     // 2b. Start the sync engine before binding the IPC server. Sync runs
     // independently of shell connection state — the shell may come and go
     // but the daemon keeps pulling from external sources.
@@ -389,6 +395,10 @@ pub async fn run_with_sync(
     // Cleanup.
     if let Some(r) = runner.take() {
         r.shutdown().await;
+    }
+    if let Some(h) = projects_workspace_task {
+        h.abort();
+        let _ = h.await;
     }
     if let Some(h) = sync_handle {
         tracing::info!("waiting for sync adapters to finish in-flight syncs");
@@ -637,6 +647,13 @@ async fn dispatch_projects(state: &SharedState) -> CtlResponse {
             tags: e.metadata.tags,
             workspace_names: e.metadata.workspace_names,
             accent_color: e.metadata.accent_color,
+            last_active_at: e.runtime.last_active_at.map(|t| t.to_rfc3339()),
+            accumulated_focus_time_secs: e.runtime.accumulated_focus_time_secs,
+            currently_active_workspaces: e
+                .runtime
+                .currently_active_workspaces
+                .into_iter()
+                .collect(),
         })
         .collect();
     CtlResponse::Projects {

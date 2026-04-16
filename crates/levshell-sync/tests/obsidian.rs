@@ -330,3 +330,157 @@ async fn reload_config_switches_vault_path_live() {
     assert!(titles.contains("in_b"));
     assert!(!titles.contains("in_a"), "vault A's note should have been removed");
 }
+
+#[tokio::test]
+async fn wiki_links_populate_entity_relations() {
+    let vault = TempDir::new().unwrap();
+    write_file(vault.path(), "a.md", "About [[b]] and [[folder/c]].");
+    write_file(vault.path(), "b.md", "B links back to [[a]].");
+    write_file(vault.path(), "folder/c.md", "C is standalone.");
+    write_file(vault.path(), "dangling.md", "Points at [[nonexistent]].");
+
+    let store = fresh_store().await;
+    let adapter = make_adapter(&vault);
+    let report = adapter.sync(&ctx(&store)).await.unwrap();
+    assert_eq!(report.upserted, 4);
+
+    // Resolve note ids via sync_metadata so the test is order-agnostic.
+    let metas = store
+        .list_sync_metadata_by_provider(PROVIDER_NAME)
+        .await
+        .unwrap();
+    let find_id = |path: &str| -> uuid::Uuid {
+        metas.iter().find(|m| m.external_id == path).unwrap().entity_id
+    };
+    let a = find_id("a.md");
+    let b = find_id("b.md");
+    let c = find_id("folder/c.md");
+    let dangling = find_id("dangling.md");
+
+    // a → {b, c}
+    let out_a = store.list_relations_from(a, EntityType::Note).await.unwrap();
+    let targets: std::collections::HashSet<_> = out_a.iter().map(|r| r.target_id).collect();
+    assert_eq!(out_a.len(), 2, "a should link to b and folder/c");
+    assert!(targets.contains(&b));
+    assert!(targets.contains(&c));
+    assert!(out_a.iter().all(|r| r.kind == "wiki_link"));
+
+    // b → {a}
+    let out_b = store.list_relations_from(b, EntityType::Note).await.unwrap();
+    assert_eq!(out_b.len(), 1);
+    assert_eq!(out_b[0].target_id, a);
+
+    // c → {}
+    assert!(store
+        .list_relations_from(c, EntityType::Note)
+        .await
+        .unwrap()
+        .is_empty());
+
+    // dangling → {} (nonexistent target, not an error)
+    assert!(store
+        .list_relations_from(dangling, EntityType::Note)
+        .await
+        .unwrap()
+        .is_empty());
+
+    // Backlinks: a receives from b (and nothing else).
+    let in_a = store.list_relations_to(a, EntityType::Note).await.unwrap();
+    assert_eq!(in_a.len(), 1);
+    assert_eq!(in_a[0].source_id, b);
+}
+
+#[tokio::test]
+async fn editing_links_updates_edges_in_place() {
+    let vault = TempDir::new().unwrap();
+    write_file(vault.path(), "src.md", "[[a]] [[b]]");
+    write_file(vault.path(), "a.md", "a");
+    write_file(vault.path(), "b.md", "b");
+    write_file(vault.path(), "c.md", "c");
+
+    let store = fresh_store().await;
+    let adapter = make_adapter(&vault);
+    adapter.sync(&ctx(&store)).await.unwrap();
+
+    let metas = store
+        .list_sync_metadata_by_provider(PROVIDER_NAME)
+        .await
+        .unwrap();
+    let find_id = |path: &str| {
+        metas.iter().find(|m| m.external_id == path).unwrap().entity_id
+    };
+    let src = find_id("src.md");
+    let a = find_id("a.md");
+    let b = find_id("b.md");
+    let c = find_id("c.md");
+
+    let out = store.list_relations_from(src, EntityType::Note).await.unwrap();
+    let targets: std::collections::HashSet<_> = out.iter().map(|r| r.target_id).collect();
+    assert_eq!(targets, std::collections::HashSet::from([a, b]));
+
+    // Rewrite src.md: drop b, add c. After sync the edges should
+    // reflect the new content exactly — old edge to b is gone.
+    write_file(vault.path(), "src.md", "[[a]] [[c]]");
+    adapter.sync(&ctx(&store)).await.unwrap();
+
+    let out = store.list_relations_from(src, EntityType::Note).await.unwrap();
+    let targets: std::collections::HashSet<_> = out.iter().map(|r| r.target_id).collect();
+    assert_eq!(
+        targets,
+        std::collections::HashSet::from([a, c]),
+        "edges should match current content, not accumulate"
+    );
+}
+
+#[tokio::test]
+async fn deleting_a_linked_note_strips_incoming_edges() {
+    let vault = TempDir::new().unwrap();
+    write_file(vault.path(), "target.md", "I am the target.");
+    write_file(vault.path(), "a.md", "links to [[target]]");
+    write_file(vault.path(), "b.md", "also links to [[target]]");
+
+    let store = fresh_store().await;
+    let adapter = make_adapter(&vault);
+    adapter.sync(&ctx(&store)).await.unwrap();
+
+    let target_id = {
+        let metas = store
+            .list_sync_metadata_by_provider(PROVIDER_NAME)
+            .await
+            .unwrap();
+        metas
+            .iter()
+            .find(|m| m.external_id == "target.md")
+            .unwrap()
+            .entity_id
+    };
+
+    // Both a and b should link to target.
+    let incoming = store
+        .list_relations_to(target_id, EntityType::Note)
+        .await
+        .unwrap();
+    assert_eq!(incoming.len(), 2);
+
+    // Now delete target.md on disk and re-sync.
+    fs::remove_file(vault.path().join("target.md")).unwrap();
+    let report = adapter.sync(&ctx(&store)).await.unwrap();
+    assert_eq!(report.deleted, 1);
+
+    // The incoming edges for target are gone (target_id is now invalid,
+    // so we verify via a.md and b.md — their outgoing wiki_link sets
+    // should not point at anyone after target.md disappears because the
+    // resolver can no longer find a basename match. Note that a.md and
+    // b.md themselves were unchanged, so their CACHED outgoing edges
+    // from the previous sync persist until their content changes.
+    // What we actually guarantee here is that list_relations_to on
+    // target_id is empty — not that a/b lose their recorded edges.)
+    let still_incoming = store
+        .list_relations_to(target_id, EntityType::Note)
+        .await
+        .unwrap();
+    assert!(
+        still_incoming.is_empty(),
+        "deleting the target must strip its incoming edges"
+    );
+}

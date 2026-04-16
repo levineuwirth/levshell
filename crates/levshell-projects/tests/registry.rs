@@ -500,3 +500,131 @@ async fn removed_project_file_preserves_db_row() {
         "DB row for a project must survive removal of its TOML file"
     );
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn workspace_changes_update_runtime_state() {
+    use levshell_core::Event;
+    use std::time::Duration;
+
+    let store = fresh_store().await;
+    let bus = EventBus::new();
+    let registry = ProjectRegistry::load_from_files(
+        store,
+        bus.clone(),
+        vec![
+            sample_file("Thesis", &[], &["writing"]),
+            sample_file("Research", &[], &["research-llm", "research-data"]),
+        ],
+    )
+    .await
+    .unwrap();
+
+    // Boot: nothing active.
+    let before = registry.find_by_name("Thesis").await.unwrap();
+    assert!(before.runtime.last_active_at.is_none());
+    assert_eq!(before.runtime.accumulated_focus_time_secs, 0);
+    assert!(before.runtime.currently_active_workspaces.is_empty());
+
+    // Focus a Thesis workspace.
+    registry.handle_workspace_change("writing").await;
+    let after = registry.find_by_name("Thesis").await.unwrap();
+    assert!(
+        after.runtime.last_active_at.is_some(),
+        "last_active_at should be set when workspace matches"
+    );
+    assert!(after
+        .runtime
+        .currently_active_workspaces
+        .contains("writing"));
+
+    // Leave the stopwatch running briefly to accrue some focus time.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    // Switch to a Research workspace. Thesis stops accruing.
+    registry.handle_workspace_change("research-llm").await;
+    let thesis = registry.find_by_name("Thesis").await.unwrap();
+    assert!(
+        thesis.runtime.accumulated_focus_time_secs >= 1,
+        "thesis should have accrued >= 1s of focus time, got {}",
+        thesis.runtime.accumulated_focus_time_secs
+    );
+    assert!(
+        !thesis
+            .runtime
+            .currently_active_workspaces
+            .contains("writing"),
+        "workspace should be removed from previous project when switched away"
+    );
+
+    let research = registry.find_by_name("Research").await.unwrap();
+    assert!(research.runtime.last_active_at.is_some());
+    assert!(research
+        .runtime
+        .currently_active_workspaces
+        .contains("research-llm"));
+
+    // Switch to an unknown workspace → both stopwatches stop but no
+    // new project becomes active.
+    registry.handle_workspace_change("random-ws").await;
+    let after = registry.find_by_name("Research").await.unwrap();
+    assert!(
+        !after
+            .runtime
+            .currently_active_workspaces
+            .contains("research-llm"),
+        "research's workspace should be cleared on leave"
+    );
+
+    // Verify the bus subscription path end-to-end.
+    let _watcher = registry.spawn_workspace_watcher();
+    bus.publish(Event::WorkspaceChanged {
+        name: "writing".into(),
+        focused_window: None,
+    });
+    // Allow the watcher task to process the event.
+    for _ in 0..16 {
+        tokio::task::yield_now().await;
+    }
+    let thesis = registry.find_by_name("Thesis").await.unwrap();
+    assert!(thesis
+        .runtime
+        .currently_active_workspaces
+        .contains("writing"));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn runtime_state_preserved_across_toml_hot_reload() {
+    use std::time::Duration;
+
+    let store = fresh_store().await;
+    let bus = EventBus::new();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("p.toml"),
+        r#"name = "P"
+workspace_names = ["ws"]
+"#,
+    )
+    .unwrap();
+    let registry = ProjectRegistry::load_from_dir(store, bus, dir.path())
+        .await
+        .unwrap();
+
+    registry.handle_workspace_change("ws").await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    registry.handle_workspace_change("other").await;
+
+    let before = registry.find_by_name("P").await.unwrap();
+    let accrued = before.runtime.accumulated_focus_time_secs;
+    assert!(accrued >= 1);
+
+    // Hot-reload (simulate by re-reading the same file on disk).
+    let file = levshell_projects::load_project_file(&dir.path().join("p.toml")).unwrap();
+    registry.upsert_from_file(file).await.unwrap();
+
+    let after = registry.find_by_name("P").await.unwrap();
+    assert_eq!(
+        after.runtime.accumulated_focus_time_secs, accrued,
+        "hot-reloading the TOML must preserve session focus-time state"
+    );
+}

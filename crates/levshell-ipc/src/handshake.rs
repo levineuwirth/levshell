@@ -147,6 +147,15 @@ pub struct ProjectSummary {
     pub tags: Vec<String>,
     pub workspace_names: Vec<String>,
     pub accent_color: Option<String>,
+
+    // Runtime metadata (spec §3.7). Session-scoped; resets on daemon
+    // restart. Timestamps are RFC3339 strings (empty when never).
+    #[serde(default)]
+    pub last_active_at: Option<String>,
+    #[serde(default)]
+    pub accumulated_focus_time_secs: u64,
+    #[serde(default)]
+    pub currently_active_workspaces: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
