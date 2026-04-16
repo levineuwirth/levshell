@@ -28,12 +28,17 @@
 #![forbid(unsafe_code)]
 
 pub mod adapter;
+pub mod ankiconnect;
 pub mod engine;
 pub mod obsidian;
 pub mod zotero;
 
 pub use adapter::{
     Result, SyncAdapter, SyncConflict, SyncContext, SyncError, SyncReport, SyncStatus,
+};
+pub use ankiconnect::{
+    AnkiClient, AnkiClientError, AnkiConnectAdapter, AnkiConnectConfig, AnkiConnectConfigError,
+    AnkiConnectConfigWatcher, AnkiConnectHttpClient,
 };
 pub use engine::{SyncEngine, SyncEngineConfig, SyncEngineHandle};
 pub use obsidian::{

@@ -17,8 +17,9 @@ use levshell_modules::{
     SwayWorkspaceModule, WorkspaceSwitcherProvider,
 };
 use levshell_sync::{
-    ObsidianAdapter, ObsidianConfig, ObsidianConfigWatcher, SyncAdapter, ZoteroAdapter,
-    ZoteroConfig, ZoteroConfigWatcher,
+    AnkiConnectAdapter, AnkiConnectConfig, AnkiConnectConfigWatcher, ObsidianAdapter,
+    ObsidianConfig, ObsidianConfigWatcher, SyncAdapter, ZoteroAdapter, ZoteroConfig,
+    ZoteroConfigWatcher,
 };
 
 #[tokio::main]
@@ -279,15 +280,78 @@ async fn main() -> Result<()> {
         _ => None,
     };
 
+    let ankiconnect_adapter = sync_dir.as_deref().and_then(|dir| {
+        let path = dir.join("ankiconnect.toml");
+        if !path.exists() {
+            tracing::debug!(path = %path.display(), "no ankiconnect.toml found");
+            return None;
+        }
+        match AnkiConnectConfig::load_from(&path) {
+            Ok(cfg) => match AnkiConnectAdapter::new(cfg.clone()) {
+                Ok(a) => {
+                    tracing::info!(
+                        endpoint = %cfg.endpoint,
+                        poll_secs = cfg.poll_interval_secs,
+                        enabled = cfg.enabled,
+                        "registering ankiconnect sync adapter"
+                    );
+                    Some(Arc::new(a))
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %e,
+                        "failed to construct ankiconnect adapter; skipping"
+                    );
+                    None
+                }
+            },
+            Err(e) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "failed to load ankiconnect.toml; skipping adapter"
+                );
+                None
+            }
+        }
+    });
+
+    let _ankiconnect_watcher = match (sync_dir.as_deref(), ankiconnect_adapter.as_ref()) {
+        (Some(dir), Some(adapter)) => {
+            match AnkiConnectConfigWatcher::spawn(adapter.clone(), dir) {
+                Ok(w) => {
+                    tracing::info!(
+                        dir = %dir.display(),
+                        "ankiconnect config hot-reload watcher started"
+                    );
+                    Some(w)
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "failed to start ankiconnect config watcher; hot-reload disabled"
+                    );
+                    None
+                }
+            }
+        }
+        _ => None,
+    };
+
     let sync_factory: SyncAdapterFactory = {
         let obsidian = obsidian_adapter.clone();
         let zotero = zotero_adapter.clone();
+        let anki = ankiconnect_adapter.clone();
         Box::new(move || {
             let mut adapters: Vec<Arc<dyn SyncAdapter>> = Vec::new();
             if let Some(a) = obsidian {
                 adapters.push(a);
             }
             if let Some(a) = zotero {
+                adapters.push(a);
+            }
+            if let Some(a) = anki {
                 adapters.push(a);
             }
             adapters

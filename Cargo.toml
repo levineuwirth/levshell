@@ -59,6 +59,9 @@ notify = "6"
 # Stochastic scheduling (ideation engine)
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
 
+# HTTP client (AnkiConnect sync adapter — localhost only, no TLS needed)
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+
 # Internal crates (referenced by path so each crate inherits the workspace version)
 levshell-core    = { path = "crates/levshell-core",    version = "0.1.0" }
 levshell-data    = { path = "crates/levshell-data",    version = "0.1.0" }
