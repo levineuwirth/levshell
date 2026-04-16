@@ -106,4 +106,49 @@ impl DataStore {
         })
         .await
     }
+
+    /// List every sync_metadata row for a given provider. Used by adapters
+    /// during a full-sync pass to detect entities whose external source has
+    /// disappeared (e.g. a deleted Obsidian vault file).
+    pub async fn list_sync_metadata_by_provider(
+        &self,
+        provider: impl Into<String>,
+    ) -> Result<Vec<SyncMetadata>> {
+        let provider = provider.into();
+        self.with_conn(move |conn| {
+            let mut stmt = conn.prepare_cached(&format!(
+                "SELECT {SYNC_METADATA_COLUMNS} FROM sync_metadata \
+                 WHERE provider = ?1"
+            ))?;
+            let rows = stmt
+                .query_map(params![provider], row_to_sync_metadata)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+        .await
+    }
+
+    /// Look up a single sync_metadata row by `(provider, external_id)`.
+    /// Used by adapters to decide whether an external source path has
+    /// already been synced (update) or is new (insert).
+    pub async fn find_sync_metadata_by_external_id(
+        &self,
+        provider: impl Into<String>,
+        external_id: impl Into<String>,
+    ) -> Result<Option<SyncMetadata>> {
+        let provider = provider.into();
+        let external_id = external_id.into();
+        self.with_conn(move |conn| {
+            let mut stmt = conn.prepare_cached(&format!(
+                "SELECT {SYNC_METADATA_COLUMNS} FROM sync_metadata \
+                 WHERE provider = ?1 AND external_id = ?2"
+            ))?;
+            match stmt.query_row(params![provider, external_id], row_to_sync_metadata) {
+                Ok(m) => Ok(Some(m)),
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                Err(e) => Err(e.into()),
+            }
+        })
+        .await
+    }
 }

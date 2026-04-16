@@ -29,8 +29,10 @@
 
 pub mod adapter;
 pub mod engine;
+pub mod obsidian;
 
 pub use adapter::{
     Result, SyncAdapter, SyncConflict, SyncContext, SyncError, SyncReport, SyncStatus,
 };
 pub use engine::{SyncEngine, SyncEngineConfig, SyncEngineHandle};
+pub use obsidian::{ObsidianAdapter, ObsidianConfig};
