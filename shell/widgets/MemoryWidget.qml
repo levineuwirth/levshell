@@ -37,7 +37,7 @@ WidgetWrapper {
             text: Theme.iconMemory
             color: root.usageColor
             font.family:    Theme.fontIcon
-            font.pixelSize: Theme.iconSizeFull
+            font.pixelSize: Theme.iconSize
         }
 
         Text {

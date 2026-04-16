@@ -130,9 +130,14 @@ Rectangle {
         const contentHeight = chromeHeight + rowsHeight + sectionsHeight;
         return Math.min(maxCardHeight, Math.max(chromeHeight + resultRowHeight, contentHeight));
     }
-    // Spec §12.1: overlay panels use `surface`, not `overlay`. This
-    // was incorrect in the Phase 1.6 first pass.
-    color: Theme.surface
+    // §12.1 + §3.1.3: overlay panels use `surface` at bar.opacity
+    // with backdrop blur, falling back to opaque on battery.
+    color: Qt.rgba(Theme.surface.r, Theme.surface.g, Theme.surface.b,
+                   Theme.onBattery ? Theme.barOpacityBattery
+                                   : Theme.barOpacity)
+    Behavior on color {
+        ColorAnimation { duration: Theme.motionNormal }
+    }
     radius: Theme.panelCornerRadius
     border.width: Theme.panelBorderWidth
     border.color: Theme.outline

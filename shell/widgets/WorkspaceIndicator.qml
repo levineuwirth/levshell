@@ -21,18 +21,6 @@ WidgetWrapper {
 
     readonly property var workspaces: (widgetState && widgetState.workspaces) || []
 
-    // Workspace indicators are wider than the default heuristic when
-    // multiple workspaces are present. Override targetWidth with a
-    // content-aware value.
-    targetWidth: {
-        if (root.prominence === "hidden") return Theme.widthHidden;
-        if (root.prominence === "badge") return Theme.widthBadge;
-        const count = Math.max(1, workspaces.length);
-        const pillWidth = 26;
-        const pad = 2 * Theme.widgetPaddingHFull;
-        return Math.min(400, pad + count * (pillWidth + Theme.spaceSm));
-    }
-
     Row {
         anchors.verticalCenter: parent.verticalCenter
         anchors.left: parent.left

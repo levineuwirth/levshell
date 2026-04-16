@@ -602,6 +602,28 @@ Includes: global color scheme synchronization (propagated to GTK, Qt, terminals,
 \subsection{Automation \& Scripting}
 \label{sec:features-automation}
 
+\subsubsection{levshell-ctl: CLI Control Interface}
+A standalone binary (\texttt{levshell-ctl}) that connects to the daemon's Unix socket, sends a single command, prints the response, and exits. This enables external control of the shell from any context: Sway keybinds, shell scripts, cron jobs, or other tools. The command format follows a \texttt{target / action / params} convention:
+
+\begin{lstlisting}[language={}]
+levshell-ctl widget ssh-dashboard reconnect gpu-cluster-3
+levshell-ctl palette query "zotero attention mechanisms"
+levshell-ctl density compact
+levshell-ctl profile activate writing
+levshell-ctl project status llm-alignment
+levshell-ctl anki due-count
+levshell-ctl notify "Build finished" --urgency normal
+\end{lstlisting}
+
+This binary reuses the existing IPC message types (\texttt{ShellMessage} enum) and codec from \texttt{levshell-ipc}. It is a thin client: connect, serialize one message, read one response, print, exit. The daemon handles \texttt{levshell-ctl} connections alongside the primary QML shell connection by accepting multiple clients on the Unix socket. Integration with Sway keybinds is direct:
+
+\begin{lstlisting}[language={}]
+# In sway config
+bindsym $mod+space exec levshell-ctl palette toggle
+bindsym $mod+shift+n exec levshell-ctl density toggle
+bindsym $mod+p exec levshell-ctl profile cycle
+\end{lstlisting}
+
 \subsubsection{User-Defined Widgets}
 An API allowing user scripts (shell, Python, Lua) to output structured data that Levshell renders as bar widgets.
 
@@ -733,7 +755,9 @@ Levshell comprises three foundational components:
 The IPC channel between the daemon and QuickShell must satisfy four requirements: low latency (widget updates feel instant), structured messages (no string parsing), bidirectional communication (daemon pushes state; QML pushes user events), and incremental updates (patches, not full state retransmission).
 
 \subsubsection{Transport}
-A Unix domain socket carrying length-prefixed messages. The initial implementation uses JSON for the message format (QML/JavaScript parses JSON natively).
+A Unix domain socket carrying NDJSON (newline-delimited JSON) messages. Each message is a single line of compact JSON terminated by \texttt{\textbackslash n}. JSON's grammar forbids unescaped newlines inside strings, making \texttt{\textbackslash n} a safe frame delimiter. This format was chosen over length-prefixed binary framing because QuickShell's \texttt{Io.Socket} API provides a \texttt{SplitParser} that splits on string delimiters but has no byte-level framing support. A per-line size cap of 16\,MB guards against malformed frames that could stall the parser.
+
+Messages are never pretty-printed on the wire (compact single-line JSON only). The QML side parses each line with \texttt{JSON.parse()}; the Rust side serializes with \texttt{serde\_json::to\_string()} and appends \texttt{\textbackslash n}.
 
 \subsubsection{Codec Abstraction and Serialization Strategy}
 
@@ -1042,7 +1066,7 @@ The context engine resolves widget layout through four layers, applied in order:
 \begin{enumerate}[leftmargin=1.5em, itemsep=4pt]
   \item \textbf{Base layer.} A default widget layout that always applies: clock, workspace indicator, system tray, notification icon. This is the fallback when no context-specific rules match.
 
-  \item \textbf{Module relevance scores.} Each module declares relevance rules as predicates. Rules specify conditions under which a widget should be visible, compact, expanded, or hidden. Conditions reference input signals and module-internal state.
+  \item \textbf{Module relevance scores.} Each module declares relevance rules as predicates. Rules specify conditions under which a widget should be visible, compact, badge, expanded, or hidden. Conditions reference input signals and module-internal state.
 
   \item \textbf{Context profiles.} Named bundles of relevance overrides. A ``writing'' profile might expand citation search, show word count, hide media controls, and suppress notifications. Profiles are activated manually, by keybind, or by auto-trigger rules.
 
@@ -1069,7 +1093,7 @@ prominence = "expanded"
 
 \subsubsection{Conflict Resolution Algorithm}
 
-Widget prominence is resolved by a strict, deterministic cascade. Given the same input signals, the algorithm always produces the same output. The prominence levels form a total order: \texttt{hidden} $<$ \texttt{icon-only} $<$ \texttt{compact} $<$ \texttt{visible} $<$ \texttt{expanded}.
+Widget prominence is resolved by a strict, deterministic cascade. Given the same input signals, the algorithm always produces the same output. The prominence levels form a total order: \texttt{hidden} $<$ \texttt{badge} $<$ \texttt{icon-only} $<$ \texttt{compact} $<$ \texttt{visible} $<$ \texttt{expanded}.
 
 \begin{enumerate}[leftmargin=1.5em, itemsep=4pt]
   \item \textbf{Step 1 --- Base layout.} Every widget slot is assigned its default prominence from the base layer configuration. This produces a complete, valid layout with no gaps or conflicts.
@@ -1078,7 +1102,7 @@ Widget prominence is resolved by a strict, deterministic cascade. Given the same
 
   \item \textbf{Step 3 --- Active context profile.} If a context profile is active (e.g., ``writing mode''), its explicit overrides replace all previous values for the widgets it mentions. Profiles are user-authored and always take precedence over module self-assessment. Widgets not mentioned in the active profile retain their Step~2 values.
 
-  \item \textbf{Step 4 --- Spatial constraint enforcement.} The bar has a finite pixel budget. Walk the widget list in \emph{global priority order} (a user-configurable ordered list that ships with sensible defaults). Place each widget at its resolved prominence. If placing a widget at its current prominence would overflow the available space, demote it one level (e.g., \texttt{expanded} $\to$ \texttt{compact} $\to$ \texttt{icon-only} $\to$ \texttt{hidden}). Highest-priority widgets receive first claim on bar real estate. This is a greedy $O(n)$ algorithm.
+  \item \textbf{Step 4 --- Spatial constraint enforcement.} The bar has a finite pixel budget. Walk the widget list in \emph{global priority order} (a user-configurable ordered list that ships with sensible defaults). Place each widget at its resolved prominence. If placing a widget at its current prominence would overflow the available space, demote it one level (e.g., \texttt{expanded} $\to$ \texttt{compact} $\to$ \texttt{icon-only} $\to$ \texttt{badge} $\to$ \texttt{hidden}). Highest-priority widgets receive first claim on bar real estate. This is a greedy $O(n)$ algorithm.
 
   \item \textbf{Step 5 --- User override.} If the user has explicitly pinned or hidden a widget via keybind or manual toggle, that decision is absolute and overrides all previous steps. A global ``show everything'' keybind sets all widgets to \texttt{visible}, bypassing the entire cascade.
 \end{enumerate}
@@ -1265,6 +1289,8 @@ levshell/
     levshell-modules/         # All built-in shell modules
     levshell-daemon/          # Binary crate: main(), wires everything,
                               # lifecycle management
+    levshell-ctl/             # CLI binary: one-shot commands to daemon
+                              # via Unix socket (connect, send, print, exit)
   shell/                      # QuickShell QML
     main.qml
     components/               # Shared QML components (degraded-state
@@ -1392,8 +1418,8 @@ WidgetUpdate {
 WidgetVisibility {
     widget_id: String,
     visible: bool,
-    prominence: Prominence,       // Hidden | IconOnly | Compact | Visible
-                                  //   | Expanded
+    prominence: Prominence,       // Hidden | Badge | IconOnly | Compact
+                                  //   | Visible | Expanded
 }
 
 BarLayout {
@@ -1595,25 +1621,94 @@ In \texttt{levshell-daemon}, implement \texttt{main()}:
   \item In \texttt{shell/}, write a minimal QML bar that connects to the Unix socket, receives \texttt{WidgetUpdate} messages, and renders the workspace indicator. This validates the full pipeline end-to-end.
 \end{enumerate}
 
-\begin{designbox}[Phase 0 Completion Criteria]
-Phase~0 is complete when: (1) the daemon starts, opens the database, and runs migrations successfully; (2) a \texttt{Project} and a \texttt{Note} can be inserted and queried via the data API; (3) the event bus delivers typed events to subscribed modules; (4) the Sway workspace module detects workspace changes and pushes widget updates over IPC; (5) the QML bar renders the workspace indicator with live data from the daemon. At this point, the full vertical slice is proven and all subsequent work is additive.
+\begin{designbox}[Phase 0 --- Complete]
+Phase~0 shipped with 35 tests across the workspace (8 data + 10 core + 11 ipc + 5 indicator + 1 daemon end-to-end), zero clippy warnings. Delivered: Cargo workspace scaffold (8 crates), unified data model with SQLite schema and migrations, typed event bus with per-subscriber filtering, NDJSON IPC over Unix socket with codec abstraction, Sway workspace module, daemon binary with \texttt{ModuleFactory} pattern, and a minimal QuickShell QML bar.
+
+\textbf{Phase 0 deviations from original spec:} IPC framing was changed from 4-byte length-prefixed binary to NDJSON (newline-delimited JSON) because QuickShell 0.2.1's \texttt{Io.Socket} only supports \texttt{SplitParser} with string delimiters, not byte-level framing. The 16\,MB per-line cap is retained. The \texttt{DataStoreUpdated} event uses \texttt{String} for \texttt{entity\_type} (not \texttt{levshell\_data::EntityType}) to keep \texttt{levshell-core} as a dependency-free leaf crate. Reference CRUD is minimal (insert + get only); other entity types have model structs but no repo methods yet. The data store uses a single \texttt{Mutex<Connection>} rather than a pool---adequate for Phase~0 write volumes.
 \end{designbox}
 
 \subsection{Phase 1: Core Shell}
 
-With the foundation proven, build the shell features that are independent of the unified data model.
+With the foundation proven, build the core shell features: the context engine, essential bar widgets, the CLI control interface, and the visual language. Phase~1 turns the infrastructure into a usable daily-driver shell.
 
-\begin{enumerate}[leftmargin=1.5em, itemsep=4pt]
-  \item \textbf{Context engine.} Implement the five-step conflict resolution algorithm (Section~\ref{sec:context-engine}), hysteresis, and the relevance rule predicate DSL.
+\subsubsection{Step 1.1: levshell-ctl CLI}
 
-  \item \textbf{System telemetry modules.} CPU, RAM, battery, network quality---these are self-contained modules that exercise the module trait and widget rendering without needing sync adapters.
+Create the \texttt{levshell-ctl} binary crate. This is a thin CLI client that connects to the daemon's Unix socket, sends a single command (serialized as a \texttt{ShellMessage}), reads one response, prints it, and exits. It reuses \texttt{levshell-ipc} message types and the NDJSON codec.
 
-  \item \textbf{Notification center.} Implement the freedesktop notification listener and the notification aggregation widget.
-
-  \item \textbf{Command palette.} Build the search overlay with initial providers: application launcher, workspace switcher, and unified data model search.
-
-  \item \textbf{Clock, calendar hub, quick-settings flyout.} Core bar widgets that establish the visual language.
+\begin{enumerate}[leftmargin=1.5em, itemsep=2pt]
+  \item Add \texttt{crates/levshell-ctl/} to the workspace. Dependencies: \texttt{levshell-ipc}, \texttt{tokio} (minimal features), \texttt{clap} for argument parsing, \texttt{anyhow}.
+  \item Implement the \texttt{target / action / params} CLI grammar:
+  \begin{lstlisting}[language={}]
+levshell-ctl widget <widget-id> <action> [params...]
+levshell-ctl palette <toggle|query> [query-string]
+levshell-ctl density <full|compact|hidden|toggle>
+levshell-ctl profile <activate|cycle> [profile-name]
+levshell-ctl status                # Daemon health summary
+  \end{lstlisting}
+  \item Modify \texttt{levshell-daemon} to accept multiple concurrent connections on the Unix socket: the primary QML shell connection (persistent, streaming) and zero or more \texttt{levshell-ctl} connections (ephemeral, one-shot). The daemon distinguishes them by behavior---a \texttt{ctl} connection sends one message and the daemon responds then closes, while the shell connection remains open.
+  \item Add a \texttt{CtlResponse} message type to the daemon$\to$client direction for one-shot command results (distinct from the streaming \texttt{DaemonMessage} types used for the QML shell).
+  \item Write integration tests: \texttt{levshell-ctl density compact} while the daemon is running, verify the density change event is emitted on the bus.
 \end{enumerate}
+
+\begin{notebox}[Sway Keybind Integration]
+Once \texttt{levshell-ctl} is functional, Sway keybinds can control Levshell directly:
+\begin{lstlisting}[language={}]
+# In ~/.config/sway/config
+bindsym $mod+space exec levshell-ctl palette toggle
+bindsym $mod+shift+n exec levshell-ctl density toggle
+bindsym $mod+p exec levshell-ctl profile cycle
+bindsym $mod+shift+s exec levshell-ctl widget ssh-dashboard reconnect
+\end{lstlisting}
+This gives Levshell the same external scriptability as DankMaterialShell's \texttt{dms ipc call} pattern, while keeping the persistent streaming socket for high-frequency QML updates.
+\end{notebox}
+
+\subsubsection{Step 1.2: Context Engine}
+
+In \texttt{levshell-context}, implement:
+
+\begin{enumerate}[leftmargin=1.5em, itemsep=2pt]
+  \item The five-step conflict resolution algorithm (Section~\ref{sec:context-engine}): base layout $\to$ module relevance $\to$ active profile $\to$ spatial constraints $\to$ user override.
+  \item The relevance rule predicate DSL, parsed from TOML configuration files. Rules reference context signals (workspace tags, focused app\_id, module-internal conditions) and specify a target prominence level.
+  \item The hysteresis system: activation delay (default 2s), deactivation delay (default 10s), configurable per-rule.
+  \item Context profile loading from \texttt{\textasciitilde/.config/levshell/profiles/*.toml}.
+  \item Integration with the event bus: subscribe to \texttt{WorkspaceChanged}, \texttt{WindowFocused}, and \texttt{ProfileActivated} events; recompute widget layout on each relevant event; push \texttt{BarLayout} and \texttt{WidgetVisibility} messages over IPC.
+  \item Tests: verify deterministic resolution across all five steps, hysteresis prevents flicker on oscillating signals, profile overrides take precedence over module rules, spatial constraint demotion works correctly.
+\end{enumerate}
+
+\subsubsection{Step 1.3: System Telemetry Modules}
+
+Self-contained modules that exercise the module trait and widget rendering without needing sync adapters or the unified data model:
+
+\begin{enumerate}[leftmargin=1.5em, itemsep=2pt]
+  \item \textbf{CPU/RAM monitor.} Reads from \texttt{/proc/stat} and \texttt{/proc/meminfo}. Emits sparkline data. Implements ``quiet until important'' --- widget is compact by default, expands when CPU $>$ 60\% or RAM $>$ 80\%.
+  \item \textbf{Battery module.} Reads from \texttt{/sys/class/power\_supply/}. Emits \texttt{PowerStateChanged} events. Shows estimated time remaining, power profile switcher.
+  \item \textbf{Network quality.} Periodic latency probe to a configurable endpoint. Color-coded dot (green/yellow/red).
+  \item Each module declares relevance rules so the context engine can test real layout resolution with multiple competing widgets.
+\end{enumerate}
+
+\subsubsection{Step 1.4: Core Bar Widgets and Visual Language}
+
+Build the QML components that establish the shell's visual identity:
+
+\begin{enumerate}[leftmargin=1.5em, itemsep=2pt]
+  \item \textbf{Clock and calendar hub.} Center clock that drops down to show a mini calendar, upcoming events placeholder (will be populated when CalDAV sync adapter lands in Phase~2), and world-clock row.
+  \item \textbf{Quick-settings flyout.} Volume, brightness, night-light, Wi-Fi toggle, Bluetooth toggle, Do Not Disturb. Each tile backed by a daemon module or a \texttt{levshell-ctl} action.
+  \item \textbf{Notification center.} Implement the freedesktop notification spec listener (via D-Bus) as a daemon module. QML renders grouped notifications with inline reply support for supported apps.
+  \item \textbf{Morphing bar density.} Implement the three density modes (full, compact, hidden) with animated transitions, controllable via \texttt{levshell-ctl density} and keybind.
+  \item \textbf{Degraded-state wrapper.} The shared QML component that applies visual treatment (dimming, warning icon, tooltip) for widgets in Stale or Error states. Every widget uses this wrapper.
+\end{enumerate}
+
+\subsubsection{Step 1.5: Command Palette}
+
+\begin{enumerate}[leftmargin=1.5em, itemsep=2pt]
+  \item A search-driven overlay triggered by keybind (via \texttt{levshell-ctl palette toggle}).
+  \item Search provider interface: each provider registers a name and a query handler. Initial providers: application launcher (reading \texttt{.desktop} files), workspace switcher, and unified data model search (notes and references via FTS5).
+  \item Results are categorized, ranked, and rendered in sections. Selecting a result dispatches to the provider's action handler.
+\end{enumerate}
+
+\begin{designbox}[Phase 1 Completion Criteria]
+Phase~1 is complete when: (1) \texttt{levshell-ctl} can send commands to the daemon and receive responses; (2) the context engine resolves widget layout deterministically from workspace/window signals, module relevance, and profiles; (3) at least three system telemetry modules render live data in the bar; (4) the notification center captures and displays desktop notifications; (5) the command palette launches applications and searches the data model; (6) the bar supports all three density modes with animated transitions. At this point, Levshell is a functional daily-driver shell (without research-specific features).
+\end{designbox}
 
 \subsection{Phase 2: Sync Adapters and Research Features}
 

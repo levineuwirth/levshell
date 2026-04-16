@@ -46,7 +46,8 @@ use levshell_context::{
 };
 use levshell_core::{Event, EventKind, Module, ModuleResult, WidgetDescriptor};
 use levshell_ipc::{
-    BarLayout, DaemonMessage, Prominence, WidgetPublisher, WidgetVisibility,
+    BarDensity, BarDensityState, BarLayout, DaemonMessage, Prominence, WidgetPublisher,
+    WidgetVisibility,
 };
 
 /// Default placeholder pixel budget until the shell reports its geometry.
@@ -270,6 +271,16 @@ impl ContextEngineModule {
             }
             Event::BarDensityRequested { mode } => {
                 self.signals.set("bar.density", mode.clone());
+                let density = match mode.as_str() {
+                    "compact" => BarDensity::Compact,
+                    "hidden" => BarDensity::Hidden,
+                    _ => BarDensity::Full,
+                };
+                if let Err(e) = self.publisher.try_send(DaemonMessage::BarDensityState(
+                    BarDensityState { mode: density },
+                )) {
+                    tracing::warn!(error = %e, "context-engine: failed to publish BarDensityState");
+                }
             }
             Event::ProfileActionRequested { action, name } => {
                 self.apply_profile_action(action, name.as_deref());

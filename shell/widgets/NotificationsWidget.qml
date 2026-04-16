@@ -1,8 +1,8 @@
-// NotificationsWidget — placeholder for Phase 1.5's notification center.
+// NotificationsWidget — bar bell icon + unread count.
 //
-// Renders a bell icon + a count of unread notifications. Currently the
-// daemon doesn't publish any state for this widget, so `widgetState` is
-// expected to be empty and the count defaults to 0.
+// Reads from the Quickshell NotificationServer's trackedNotifications
+// model (owned by main.qml's `notifServer`). Clicking toggles the
+// notification center overlay.
 
 import QtQuick
 import ".."
@@ -12,10 +12,25 @@ WidgetWrapper {
 
     property var widgetState: ({})
 
-    readonly property int unreadCount: (widgetState && widgetState.unread) || 0
+    readonly property int unreadCount:
+        notifServer ? notifServer.trackedNotifications.count : 0
 
-    readonly property color bellColor:
-        unreadCount > 0 ? root.accentColor : Theme.fgMuted
+    readonly property bool dnd: shell.doNotDisturb
+
+    readonly property string icon:
+        dnd ? Theme.iconBellSlash : Theme.iconBell
+
+    readonly property color bellColor: {
+        if (dnd) return Theme.fgMuted;
+        if (unreadCount > 0) return root.accentColor;
+        return Theme.fgMuted;
+    }
+
+    MouseArea {
+        anchors.fill: parent
+        z: 10
+        onClicked: shell.toggleNotificationCenter()
+    }
 
     Row {
         anchors.verticalCenter: parent.verticalCenter
@@ -24,10 +39,10 @@ WidgetWrapper {
 
         Text {
             anchors.verticalCenter: parent.verticalCenter
-            text: Theme.iconBell
+            text: root.icon
             color: root.bellColor
             font.family:    Theme.fontIcon
-            font.pixelSize: Theme.iconSizeFull
+            font.pixelSize: Theme.iconSize
         }
 
         Text {

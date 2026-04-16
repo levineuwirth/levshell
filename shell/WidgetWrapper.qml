@@ -68,18 +68,24 @@ Item {
     readonly property color accentColor:  degraded ? Theme.outline : Theme.primary
     readonly property color subtleColor:  degraded ? Theme.fgMuted : Theme.fgSubtle
 
-    // Target width for the current prominence level. Widgets with
-    // content-aware sizing override `targetWidth` directly.
+    // Target width is content-driven per §5 / §7: the wrapper measures
+    // its child content and adds `widgetPaddingH` on each side.
+    // Fixed tokens are used only for the two prominence levels that
+    // don't render child content at all:
+    //   • "hidden" → zero width (removed from layout).
+    //   • "badge"  → the 6px dot rectangle rendered by the wrapper
+    //     itself; children are not shown.
+    //
+    // `contentHolder.childrenRect.width` is the union of all visible
+    // descendants' bounding boxes. Widgets anchor their Row/Column at
+    // `contentHolder.left` so `childrenRect.x == 0` and
+    // `childrenRect.width == Row.implicitWidth`, making this binding
+    // loop-free. Width changes animate through `Behavior on width`.
     property int targetWidth: {
-        switch (prominence) {
-        case "hidden":    return Theme.widthHidden;
-        case "badge":     return Theme.widthBadge;
-        case "icon_only": return Theme.widthIconOnly;
-        case "compact":   return Theme.widthCompact;
-        case "visible":   return Theme.widthVisible;
-        case "expanded":  return Theme.widthExpanded;
-        default:          return Theme.widthVisible;
-        }
+        if (prominence === "hidden") return Theme.widthHidden;
+        if (prominence === "badge")  return Theme.widthBadge;
+        return Math.ceil(contentHolder.childrenRect.width)
+               + 2 * Theme.widgetPaddingH;
     }
 
     readonly property bool isBadge: prominence === "badge"
@@ -87,7 +93,7 @@ Item {
         prominence !== "hidden" && status !== "unavailable"
 
     implicitWidth:  targetWidth
-    implicitHeight: Theme.barHeightFull
+    implicitHeight: Theme.barHeight
     width:  targetWidth
     opacity: isVisibleAtAll ? 1.0 : 0.0
     visible: opacity > 0.01
@@ -119,8 +125,8 @@ Item {
     Item {
         id: contentHolder
         anchors.fill: parent
-        anchors.leftMargin:  Theme.widgetPaddingHFull
-        anchors.rightMargin: Theme.widgetPaddingHFull
+        anchors.leftMargin:  Theme.widgetPaddingH
+        anchors.rightMargin: Theme.widgetPaddingH
         anchors.topMargin:   Theme.spaceXs
         anchors.bottomMargin: Theme.spaceXs
         visible: !root.isBadge && root.isVisibleAtAll

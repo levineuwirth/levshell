@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use levshell_core::{Event, EventBus, Module, ModuleError, ModuleResult, WidgetDescriptor};
-use levshell_ipc::{DaemonMessage, WidgetPublisher, WidgetStatus, WidgetUpdate};
+use levshell_ipc::{DaemonMessage, PowerState, WidgetPublisher, WidgetStatus, WidgetUpdate};
 use serde::{Deserialize, Serialize};
 
 pub const BATTERY_WIDGET_ID: &str = "battery";
@@ -190,6 +190,14 @@ impl BatteryModule {
             self.bus.publish(Event::PowerStateChanged {
                 on_battery: state.on_battery,
             });
+            if let Err(e) = self
+                .publisher
+                .try_send(DaemonMessage::PowerState(PowerState {
+                    on_battery: state.on_battery,
+                }))
+            {
+                tracing::warn!(error = %e, "telemetry-battery: failed to publish PowerState");
+            }
             self.last_on_battery = Some(state.on_battery);
         }
         self.publish(&state);

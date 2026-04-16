@@ -78,7 +78,7 @@ WidgetWrapper {
             text: root.icon
             color: root.qualityColor
             font.family:    Theme.fontIcon
-            font.pixelSize: Theme.iconSizeFull
+            font.pixelSize: Theme.iconSize
         }
 
         Text {

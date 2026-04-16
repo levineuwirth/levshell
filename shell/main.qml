@@ -35,6 +35,8 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
+import Quickshell.Wayland._BackgroundEffect
+import Quickshell.Services.Notifications
 import "."
 import "widgets"
 
@@ -52,6 +54,48 @@ Scope {
     FontLoader {
         id: phosphorFont
         source: "fonts/Phosphor.ttf"
+    }
+
+    // ----------------------------------------------------------------------
+    // Freedesktop notification server (§2.1.6).
+    //
+    // Quickshell's NotificationServer claims org.freedesktop.Notifications
+    // on the session D-Bus and receives all desktop notifications. Setting
+    // `tracked = true` on each incoming notification keeps it in
+    // `trackedNotifications` until the user explicitly dismisses it.
+    // ----------------------------------------------------------------------
+    NotificationServer {
+        id: notifServer
+        bodySupported: true
+        imageSupported: true
+        actionsSupported: true
+        inlineReplySupported: true
+        persistenceSupported: true
+
+        onNotification: (notification) => {
+            notification.tracked = true;
+            shell.notifArrivalTimes[notification.id] = Date.now();
+            shell.notifArrivalTimes = shell.notifArrivalTimes; // trigger change
+        }
+    }
+
+    property bool notificationCenterOpen: false
+    property bool doNotDisturb: false
+    property var notifArrivalTimes: ({})
+    property bool clockHubOpen: false
+    property bool quickSettingsOpen: false
+
+    function toggleNotificationCenter() {
+        notificationCenterOpen = !notificationCenterOpen;
+        if (notificationCenterOpen) { clockHubOpen = false; quickSettingsOpen = false; }
+    }
+    function toggleClockHub() {
+        clockHubOpen = !clockHubOpen;
+        if (clockHubOpen) { notificationCenterOpen = false; quickSettingsOpen = false; }
+    }
+    function toggleQuickSettings() {
+        quickSettingsOpen = !quickSettingsOpen;
+        if (quickSettingsOpen) { notificationCenterOpen = false; clockHubOpen = false; }
     }
 
     // ----------------------------------------------------------------------
@@ -133,10 +177,15 @@ Scope {
             };
             break;
         }
+        case "power_state": {
+            Theme.onBattery = msg.on_battery || false;
+            break;
+        }
+        case "bar_density_state": {
+            Theme.density = msg.mode || "full";
+            break;
+        }
         default:
-            // Unknown message types (e.g. a future Theme variant) are
-            // silently ignored. The daemon's non_exhaustive enums are
-            // designed for forward-compat; the shell matches that.
             break;
         }
     }
@@ -175,17 +224,38 @@ Scope {
                 left: true
                 right: true
             }
-            // Full-density bar height per spec §5.2. Density modes
-            // (compact/hidden) will be wired to this in a later phase.
-            implicitHeight: Theme.barHeightFull
-            // The bar itself uses `surface` per §3.2 — not `bg`, which
-            // is the desktop layer behind the bar.
-            color: Theme.surface
+            implicitHeight: Theme.barHeight
+
+            Behavior on implicitHeight {
+                SpringAnimation {
+                    spring:  Theme.springDefault
+                    damping: Theme.springDefaultCriticalDamping
+                    mass:    Theme.springMass
+                    epsilon: 0.5
+                }
+            }
+
+            // §3.1.3 — semi-transparent surface in blur mode, opaque on
+            // battery. The alpha channel drives the translucency; the
+            // BackgroundEffect attachment below requests compositor-side
+            // blur (no-op on Sway today, active on KWin / when
+            // ext_background_effect_v1 lands in wlroots).
+            color: Qt.rgba(Theme.surface.r, Theme.surface.g,
+                           Theme.surface.b,
+                           Theme.onBattery ? Theme.barOpacityBattery
+                                           : Theme.barOpacity)
+            Behavior on color {
+                ColorAnimation { duration: Theme.motionNormal }
+            }
+
+            BackgroundEffect.blurRegion: Region {
+                width: panel.width
+                height: panel.height
+            }
 
             // Inner-shadow contrast floor — §3.2.1. A 1-2px dark strip
             // along the bar's bottom edge provides a subtle but
-            // guaranteed contrast anchor even against bright wallpapers
-            // (matters more once blur mode lands).
+            // guaranteed contrast anchor even against bright wallpapers.
             Rectangle {
                 anchors.left: parent.left
                 anchors.right: parent.right
@@ -201,7 +271,7 @@ Scope {
                 anchors.left: parent.left
                 anchors.leftMargin: Theme.spaceLg
                 anchors.verticalCenter: parent.verticalCenter
-                spacing: Theme.interWidgetGapFull
+                spacing: Theme.interWidgetGap
 
                 Repeater {
                     model: shell.barLayout.left
@@ -223,7 +293,7 @@ Scope {
                 id: centerZone
                 anchors.horizontalCenter: parent.horizontalCenter
                 anchors.verticalCenter: parent.verticalCenter
-                spacing: Theme.interWidgetGapFull
+                spacing: Theme.interWidgetGap
 
                 Repeater {
                     model: shell.barLayout.center
@@ -246,7 +316,7 @@ Scope {
                 anchors.right: parent.right
                 anchors.rightMargin: Theme.spaceLg
                 anchors.verticalCenter: parent.verticalCenter
-                spacing: Theme.interWidgetGapFull
+                spacing: Theme.interWidgetGap
 
                 Repeater {
                     model: shell.barLayout.right
@@ -341,6 +411,10 @@ Scope {
         WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
         WlrLayershell.namespace: "levshell-palette"
 
+        BackgroundEffect.blurRegion: Region {
+            item: paletteOverlay
+        }
+
         anchors {
             top: true
             left: true
@@ -361,11 +435,195 @@ Scope {
             id: paletteOverlay
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.top: parent.top
-            anchors.topMargin: Theme.barHeightFull + Theme.spaceLg
+            anchors.topMargin: Theme.barHeight + Theme.spaceLg
             paletteData: shell.paletteState
             onQueryChanged: (text) => shell.sendPaletteQuery(text)
             onSelect: (provider, itemId) => shell.sendPaletteSelect(provider, itemId)
             onClose: () => shell.sendPaletteClose()
+        }
+    }
+
+    // ----------------------------------------------------------------------
+    // Notification center overlay window (§12.3).
+    //
+    // Same pattern as the palette overlay: a full-screen transparent
+    // PanelWindow with click-outside-to-close, hosting the
+    // NotificationCenter card anchored top-right below the bar.
+    // ----------------------------------------------------------------------
+    PanelWindow {
+        id: notifWindow
+
+        property bool isClosing: false
+        visible: shell.notificationCenterOpen || isClosing
+
+        Connections {
+            target: shell
+            function onNotificationCenterOpenChanged() {
+                if (shell.notificationCenterOpen) {
+                    notifWindow.isClosing = false;
+                    notifCloseTimer.stop();
+                } else if (notifWindow.visible && !notifWindow.isClosing) {
+                    notifWindow.isClosing = true;
+                    notifCloseTimer.restart();
+                }
+            }
+        }
+
+        Timer {
+            id: notifCloseTimer
+            interval: Theme.motionSlow + 50
+            onTriggered: notifWindow.isClosing = false
+        }
+
+        WlrLayershell.layer: WlrLayer.Overlay
+        WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+        WlrLayershell.namespace: "levshell-notifications"
+
+        BackgroundEffect.blurRegion: Region {
+            item: notifCenter
+        }
+
+        anchors {
+            top: true
+            left: true
+            right: true
+            bottom: true
+        }
+        color: "transparent"
+
+        MouseArea {
+            anchors.fill: parent
+            onClicked: shell.notificationCenterOpen = false
+        }
+
+        NotificationCenter {
+            id: notifCenter
+            anchors.right: parent.right
+            anchors.rightMargin: Theme.spaceLg
+            anchors.top: parent.top
+            anchors.topMargin: Theme.barHeight + Theme.spaceSm
+            notifModel: notifServer.trackedNotifications
+            arrivalTimes: shell.notifArrivalTimes
+            doNotDisturb: shell.doNotDisturb
+            onDndToggled: shell.doNotDisturb = !shell.doNotDisturb
+            onCloseRequested: shell.notificationCenterOpen = false
+            isOpen: shell.notificationCenterOpen
+        }
+    }
+
+    // ----------------------------------------------------------------------
+    // Clock & calendar hub overlay (§2.1.5 scaffold).
+    //
+    // Placeholder: mini calendar, upcoming events, world-clock row.
+    // Content will be populated when CalDAV sync adapter lands in Phase 2.
+    // ----------------------------------------------------------------------
+    PanelWindow {
+        id: clockHubWindow
+
+        property bool isClosing: false
+        visible: shell.clockHubOpen || isClosing
+
+        Connections {
+            target: shell
+            function onClockHubOpenChanged() {
+                if (shell.clockHubOpen) {
+                    clockHubWindow.isClosing = false;
+                    clockHubCloseTimer.stop();
+                } else if (clockHubWindow.visible && !clockHubWindow.isClosing) {
+                    clockHubWindow.isClosing = true;
+                    clockHubCloseTimer.restart();
+                }
+            }
+        }
+
+        Timer {
+            id: clockHubCloseTimer
+            interval: Theme.motionSlow + 50
+            onTriggered: clockHubWindow.isClosing = false
+        }
+
+        WlrLayershell.layer: WlrLayer.Overlay
+        WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+        WlrLayershell.namespace: "levshell-clock-hub"
+
+        BackgroundEffect.blurRegion: Region {
+            item: clockHubPanel
+        }
+
+        anchors { top: true; left: true; right: true; bottom: true }
+        color: "transparent"
+
+        MouseArea {
+            anchors.fill: parent
+            onClicked: shell.clockHubOpen = false
+        }
+
+        ClockHub {
+            id: clockHubPanel
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.top: parent.top
+            anchors.topMargin: Theme.barHeight + Theme.spaceSm
+            isOpen: shell.clockHubOpen
+        }
+    }
+
+    // ----------------------------------------------------------------------
+    // Quick-settings flyout overlay (§2.1.7 scaffold).
+    //
+    // Placeholder: volume/brightness sliders, toggle tiles for Wi-Fi,
+    // Bluetooth, DnD, night-light. Will wire to PipeWire and
+    // brightnessctl in a later phase.
+    // ----------------------------------------------------------------------
+    PanelWindow {
+        id: quickSettingsWindow
+
+        property bool isClosing: false
+        visible: shell.quickSettingsOpen || isClosing
+
+        Connections {
+            target: shell
+            function onQuickSettingsOpenChanged() {
+                if (shell.quickSettingsOpen) {
+                    quickSettingsWindow.isClosing = false;
+                    qsCloseTimer.stop();
+                } else if (quickSettingsWindow.visible && !quickSettingsWindow.isClosing) {
+                    quickSettingsWindow.isClosing = true;
+                    qsCloseTimer.restart();
+                }
+            }
+        }
+
+        Timer {
+            id: qsCloseTimer
+            interval: Theme.motionSlow + 50
+            onTriggered: quickSettingsWindow.isClosing = false
+        }
+
+        WlrLayershell.layer: WlrLayer.Overlay
+        WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+        WlrLayershell.namespace: "levshell-quick-settings"
+
+        BackgroundEffect.blurRegion: Region {
+            item: quickSettingsPanel
+        }
+
+        anchors { top: true; left: true; right: true; bottom: true }
+        color: "transparent"
+
+        MouseArea {
+            anchors.fill: parent
+            onClicked: shell.quickSettingsOpen = false
+        }
+
+        QuickSettings {
+            id: quickSettingsPanel
+            anchors.right: parent.right
+            anchors.rightMargin: Theme.spaceLg
+            anchors.top: parent.top
+            anchors.topMargin: Theme.barHeight + Theme.spaceSm
+            isOpen: shell.quickSettingsOpen
+            doNotDisturb: shell.doNotDisturb
+            onDndToggled: shell.doNotDisturb = !shell.doNotDisturb
         }
     }
 

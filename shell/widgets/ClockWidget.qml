@@ -29,6 +29,12 @@ WidgetWrapper {
 
     Component.onCompleted: tick()
 
+    MouseArea {
+        anchors.fill: parent
+        z: 10
+        onClicked: shell.toggleClockHub()
+    }
+
     Timer {
         interval: 1000
         running: true
@@ -37,7 +43,8 @@ WidgetWrapper {
     }
 
     Column {
-        anchors.centerIn: parent
+        anchors.left: parent.left
+        anchors.verticalCenter: parent.verticalCenter
         spacing: 0
 
         Text {

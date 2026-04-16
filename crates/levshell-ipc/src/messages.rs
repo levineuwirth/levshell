@@ -23,6 +23,8 @@ pub enum DaemonMessage {
     WidgetUpdate(WidgetUpdate),
     WidgetVisibility(WidgetVisibility),
     BarLayout(BarLayout),
+    PowerState(PowerState),
+    BarDensityState(BarDensityState),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -111,6 +113,16 @@ pub struct CommandPaletteQuery {
 pub struct CommandPaletteSelect {
     pub provider: String,
     pub item_id: String,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PowerState {
+    pub on_battery: bool,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BarDensityState {
+    pub mode: BarDensity,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]

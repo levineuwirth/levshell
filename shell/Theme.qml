@@ -126,8 +126,32 @@ QtObject {
     readonly property int space2xl: 24
 
     // =================================================================
-    // BAR GEOMETRY — §5.2
+    // BAR BLUR AND OPACITY — §3.1.3
+    //
+    // In blur mode the bar and overlay panels are semi-transparent with
+    // a compositor-side backdrop blur. On battery (or when the
+    // compositor lacks the ext_background_effect_v1 protocol) the bar
+    // falls back to full opacity. Both modes are intentional visual
+    // treatments — opaque is not "broken blur". The daemon relays
+    // PowerStateChanged → DaemonMessage::PowerState; the shell sets
+    // `onBattery` in its dispatchDaemonMessage handler.
     // =================================================================
+    readonly property real barOpacity:        0.80
+    readonly property real barOpacityBattery: 1.0
+    readonly property int  barBlurRadius:          30
+    readonly property int  barBlurRadiusBattery:   0
+
+    property bool onBattery: false
+
+    // =================================================================
+    // BAR GEOMETRY — §5.2
+    //
+    // Static per-density token pairs. The `density` property (set by
+    // the shell's `dispatchDaemonMessage` handler) selects between them
+    // via the computed `barHeight`, `iconSize`, etc. accessors below.
+    // =================================================================
+    property string density: "full"
+
     readonly property int barHeightFull:    44
     readonly property int barHeightCompact: 32
     readonly property int barHeightHidden:  0
@@ -143,7 +167,21 @@ QtObject {
     readonly property int interWidgetGapFull:    8
     readonly property int interWidgetGapCompact: 4
 
-    // Bar widgets are edge-to-edge in the bar — no rounding.
+    // Density-responsive computed tokens. Widgets and the bar bind to
+    // these instead of the static *Full / *Compact variants.
+    readonly property int barHeight:
+        density === "full" ? barHeightFull
+      : density === "compact" ? barHeightCompact
+      : barHeightHidden
+    readonly property int iconSize:
+        density === "compact" ? iconSizeCompact : iconSizeFull
+    readonly property int widgetPaddingH:
+        density === "compact" ? widgetPaddingHCompact : widgetPaddingHFull
+    readonly property int widgetPaddingV:
+        density === "compact" ? widgetPaddingVCompact : widgetPaddingVFull
+    readonly property int interWidgetGap:
+        density === "compact" ? interWidgetGapCompact : interWidgetGapFull
+
     readonly property int widgetCornerRadius: 0
 
     // =================================================================
@@ -192,16 +230,15 @@ QtObject {
     // PROMINENCE WIDTH HEURISTICS
     //
     // The spec doesn't prescribe pixel widths per prominence — those are
-    // content-driven. These are fallback targets used by WidgetWrapper
-    // when a widget doesn't override `targetWidth`. They match the
-    // heuristic table in `levshell-modules::context_engine`.
+    // content-driven (§5, §7). WidgetWrapper sizes itself from its child
+    // content plus `widgetPaddingH` on each side. The two tokens
+    // below are the only non-content-driven widths in the system:
+    //   • widthHidden — zero, used when prominence == "hidden".
+    //   • widthBadge  — the 6px dot + breathing room, used when
+    //     prominence == "badge" (no icon/text content at all).
     // =================================================================
-    readonly property int widthHidden:   0
-    readonly property int widthBadge:    16
-    readonly property int widthIconOnly: 32
-    readonly property int widthCompact:  96
-    readonly property int widthVisible:  160
-    readonly property int widthExpanded: 220
+    readonly property int widthHidden: 0
+    readonly property int widthBadge:  16
 
     // =================================================================
     // ICONOGRAPHY — §8 Phosphor Icons private-use-area codepoints
@@ -244,6 +281,10 @@ QtObject {
     readonly property string iconWifiLow:         "\uE4EC"  // ph-wifi-low
     readonly property string iconWifiSlash:       "\uE4F2"  // ph-wifi-slash (no connection)
     readonly property string iconNetwork:         "\uEDDE"  // ph-network (wired / generic)
+
+    // Notification center — bell variant for DnD, dismiss glyph.
+    readonly property string iconBellSlash:       "\uE0D0"  // ph-bell-slash
+    readonly property string iconX:               "\uE4F6"  // ph-x
 
     // Status indicator icon aliases (referenced by WidgetWrapper).
     readonly property string statusIconStale: iconClockCountdown

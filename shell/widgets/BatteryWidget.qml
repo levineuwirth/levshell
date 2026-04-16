@@ -51,6 +51,12 @@ WidgetWrapper {
         return h + "h" + String(m).padStart(2, '0');
     }
 
+    MouseArea {
+        anchors.fill: parent
+        z: 10
+        onClicked: shell.toggleQuickSettings()
+    }
+
     Row {
         anchors.verticalCenter: parent.verticalCenter
         anchors.left: parent.left
@@ -61,7 +67,7 @@ WidgetWrapper {
             text: root.icon
             color: root.batteryColor
             font.family:    Theme.fontIcon
-            font.pixelSize: Theme.iconSizeFull
+            font.pixelSize: Theme.iconSize
         }
 
         Text {

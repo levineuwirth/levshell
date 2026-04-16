@@ -24,8 +24,9 @@ pub use handshake::{
     PROTOCOL_VERSION,
 };
 pub use messages::{
-    BarDensity, BarLayout, CommandPaletteQuery, CommandPaletteSelect, DaemonMessage, DensityChange,
-    Prominence, ShellMessage, WidgetAction, WidgetStatus, WidgetUpdate, WidgetVisibility,
+    BarDensity, BarDensityState, BarLayout, CommandPaletteQuery, CommandPaletteSelect,
+    DaemonMessage, DensityChange, PowerState, Prominence, ShellMessage, WidgetAction, WidgetStatus,
+    WidgetUpdate, WidgetVisibility,
 };
 pub use publisher::{spawn_writer_task, WidgetPublisher, WriterTask};
 pub use server::{default_socket_path, IpcConnection, IpcReader, IpcServer, IpcWriter};
