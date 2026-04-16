@@ -41,12 +41,15 @@ use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::Utc;
+use levshell_config::{watch_config_dir, ConfigChange, ConfigWatcher, WatcherError};
 use levshell_data::{EntityType, NewNote, NotePatch, SyncDirection, SyncMetadata};
 use sha2::{Digest, Sha256};
+use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 use crate::adapter::{
@@ -79,30 +82,55 @@ struct Payload<'a> {
     tags: Vec<String>,
 }
 
-/// The adapter itself. Holds immutable config; all mutable state lives
-/// in the data store.
+/// The adapter. Config lives behind a read-write lock so it can be
+/// hot-reloaded without tearing down the adapter task. Every trait
+/// method takes a snapshot clone at its entry point; in-flight calls
+/// continue with the config they observed at start, while subsequent
+/// calls see any reloaded values.
 pub struct ObsidianAdapter {
-    config: ObsidianConfig,
+    config: Arc<RwLock<ObsidianConfig>>,
 }
 
 impl ObsidianAdapter {
     pub fn new(config: ObsidianConfig) -> Self {
-        Self { config }
+        Self {
+            config: Arc::new(RwLock::new(config)),
+        }
     }
 
-    pub fn config(&self) -> &ObsidianConfig {
-        &self.config
+    /// Replace the adapter's config atomically. See
+    /// [`crate::obsidian`] module docs for hot-reload semantics. The
+    /// caller is expected to hold a strong `Arc<ObsidianAdapter>` (the
+    /// sync engine does) so the adapter isn't torn down while the
+    /// daemon's watcher calls this.
+    pub fn reload_config(&self, new: ObsidianConfig) {
+        let mut guard = self.config.write().expect("obsidian config lock poisoned");
+        *guard = new;
     }
 
-    fn walk_vault(&self) -> io::Result<Vec<VaultEntry>> {
+    /// Snapshot clone of the current live config. Useful for tests,
+    /// diagnostics, and watchers that want to inspect the active
+    /// settings. The value is a clone — mutations on the returned
+    /// struct do NOT affect the adapter.
+    pub fn current_config(&self) -> ObsidianConfig {
+        self.snapshot()
+    }
+
+    /// Snapshot clone of the current config. Used internally so each
+    /// method grabs a consistent view for its entire execution.
+    fn snapshot(&self) -> ObsidianConfig {
+        self.config.read().expect("obsidian config lock poisoned").clone()
+    }
+
+    fn walk_vault(config: &ObsidianConfig) -> io::Result<Vec<VaultEntry>> {
         let mut out = Vec::new();
-        if !self.config.vault_path.is_dir() {
+        if !config.vault_path.is_dir() {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
-                format!("vault path not a directory: {:?}", self.config.vault_path),
+                format!("vault path not a directory: {:?}", config.vault_path),
             ));
         }
-        walk_dir(&self.config.vault_path, &self.config.vault_path, &self.config, &mut out)?;
+        walk_dir(&config.vault_path, &config.vault_path, config, &mut out)?;
         Ok(out)
     }
 }
@@ -184,25 +212,27 @@ impl SyncAdapter for ObsidianAdapter {
     }
 
     fn poll_interval(&self) -> Duration {
-        self.config.poll_interval()
+        self.snapshot().poll_interval()
     }
 
     async fn probe(&self, _ctx: &SyncContext) -> SyncStatus {
-        if !self.config.enabled {
+        let config = self.snapshot();
+        if !config.enabled {
             return SyncStatus::Unavailable;
         }
-        if !self.config.vault_path.is_dir() {
+        if !config.vault_path.is_dir() {
             return SyncStatus::Unavailable;
         }
         SyncStatus::Healthy
     }
 
     async fn sync(&self, ctx: &SyncContext) -> Result<SyncReport> {
-        if !self.config.enabled {
+        let config = self.snapshot();
+        if !config.enabled {
             return Ok(SyncReport::default());
         }
 
-        let entries = self.walk_vault().map_err(SyncError::from)?;
+        let entries = Self::walk_vault(&config).map_err(SyncError::from)?;
 
         // Index existing sync_metadata rows by external_id so the main
         // loop is O(1) per file instead of one DB query per file.
@@ -392,4 +422,90 @@ async fn replace_tags(ctx: &SyncContext, note_id: Uuid, new_tags: &[String]) -> 
         }
     }
     Ok(())
+}
+
+/// Hot-reload supervisor for an [`ObsidianAdapter`]. Watches the
+/// configured sync directory and calls
+/// [`ObsidianAdapter::reload_config`] whenever `obsidian.toml` is
+/// created / modified. Spec §3.9 requires all configuration to be
+/// hot-reloadable via inotify.
+///
+/// Hold this for as long as the adapter is in use; dropping it stops
+/// the watch but leaves the adapter's last-applied config in place.
+pub struct ObsidianConfigWatcher {
+    _watcher: ConfigWatcher,
+    task: JoinHandle<()>,
+}
+
+impl ObsidianConfigWatcher {
+    /// Watch `sync_dir` (typically `$XDG_CONFIG_HOME/levshell/sync/`)
+    /// for changes to `obsidian.toml` and apply them to `adapter`.
+    /// Other files in the directory (e.g. future `zotero.toml`) are
+    /// ignored by this watcher.
+    ///
+    /// When the config file is deleted the adapter is flipped to
+    /// `enabled = false` rather than having its vault_path etc.
+    /// cleared — that keeps the adapter task alive (probes return
+    /// `Unavailable` cleanly) so a later re-add of the file can
+    /// recover without a daemon restart.
+    pub fn spawn(
+        adapter: Arc<ObsidianAdapter>,
+        sync_dir: &Path,
+    ) -> std::result::Result<Self, WatcherError> {
+        let (watcher, mut rx) = watch_config_dir(sync_dir)?;
+        let config_path = sync_dir.join("obsidian.toml");
+        let task = tokio::spawn(async move {
+            while let Some(change) = rx.recv().await {
+                match change {
+                    ConfigChange::Upserted(path) if path == config_path => {
+                        match ObsidianConfig::load_from(&path) {
+                            Ok(new) => {
+                                tracing::info!(
+                                    vault = %new.vault_path.display(),
+                                    enabled = new.enabled,
+                                    poll_secs = new.poll_interval_secs,
+                                    "obsidian hot-reload: applying new config"
+                                );
+                                adapter.reload_config(new);
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    path = %path.display(),
+                                    error = %e,
+                                    "obsidian hot-reload: parse failed; adapter unchanged"
+                                );
+                            }
+                        }
+                    }
+                    ConfigChange::Removed(path) if path == config_path => {
+                        tracing::info!(
+                            "obsidian hot-reload: config file removed; disabling adapter"
+                        );
+                        let mut current = adapter.current_config();
+                        current.enabled = false;
+                        adapter.reload_config(current);
+                    }
+                    _ => {}
+                }
+            }
+            tracing::debug!("obsidian hot-reload: watcher channel closed");
+        });
+        Ok(Self {
+            _watcher: watcher,
+            task,
+        })
+    }
+
+    /// Abort the background task and await its exit. Call on clean
+    /// shutdown; `drop` alone stops the task without awaiting.
+    pub async fn shutdown(self) {
+        self.task.abort();
+        let _ = self.task.await;
+    }
+}
+
+impl std::fmt::Debug for ObsidianConfigWatcher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ObsidianConfigWatcher").finish_non_exhaustive()
+    }
 }

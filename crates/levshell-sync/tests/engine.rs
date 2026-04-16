@@ -242,7 +242,7 @@ async fn battery_mode_lengthens_poll_interval() {
         bus,
         SyncEngineConfig {
             battery_poll_multiplier: 3.0,
-            on_battery: true,
+            initial_on_battery: true,
         },
     );
     engine.register(adapter);
@@ -269,6 +269,89 @@ async fn battery_mode_lengthens_poll_interval() {
         .expect("timeout on second tick after multiplied interval")
         .expect("bus closed");
     assert_eq!(sync_calls.load(Ordering::SeqCst), 2);
+
+    handle.shutdown().await;
+}
+
+/// Dynamic battery-mode per spec §5.3: a `PowerStateChanged` event on
+/// the bus must flip the sync engine's effective poll interval without a
+/// restart. The watch-channel implementation also interrupts in-flight
+/// sleeps so the new multiplier takes effect immediately, not on the
+/// next post-sync sleep. This test validates both flips (AC→batt and
+/// batt→AC) work across multiple ticks.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn battery_mode_updates_live_via_power_state_changed() {
+    let bus = EventBus::new();
+    let store = fresh_store().await;
+    let mut rx = bus.subscribe("test-observer", [EventKind::SyncCompleted], 16);
+
+    let adapter = Arc::new(MockAdapter::new("live-batt", Duration::from_secs(60)));
+    let sync_calls = adapter.sync_calls.clone();
+
+    let mut engine = SyncEngine::with_config(
+        store,
+        bus.clone(),
+        SyncEngineConfig {
+            battery_poll_multiplier: 3.0,
+            initial_on_battery: false,
+        },
+    );
+    engine.register(adapter);
+    let handle = engine.spawn();
+
+    // Publish *before* the first sync's effective_interval call: the
+    // battery watcher is spawned before adapter tasks, so a handful of
+    // `yield_now`s lets both the publish and the watcher's receive run
+    // ahead of the adapter's first sleep computation.
+    bus.publish(levshell_core::Event::PowerStateChanged {
+        on_battery: true,
+    });
+    for _ in 0..8 {
+        tokio::task::yield_now().await;
+    }
+
+    // Consume the first tick. By the time its effective_interval is
+    // called, the atomic has been flipped to on_battery=true.
+    tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("first tick timeout")
+        .expect("bus closed");
+    assert_eq!(sync_calls.load(Ordering::SeqCst), 1);
+
+    // 60s passes — on-AC would have ticked here, but we're on battery
+    // so the 60s base stretches to 180s.
+    tokio::time::advance(Duration::from_secs(60)).await;
+    let second = tokio::time::timeout(Duration::from_millis(100), rx.recv()).await;
+    assert!(
+        second.is_err(),
+        "second tick must not fire at 60s once battery mode is active"
+    );
+    assert_eq!(sync_calls.load(Ordering::SeqCst), 1);
+
+    // 180s cumulative — the multiplied interval has elapsed.
+    tokio::time::advance(Duration::from_secs(121)).await;
+    tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("second tick never fired at 180s")
+        .expect("bus closed");
+    assert_eq!(sync_calls.load(Ordering::SeqCst), 2);
+
+    // Flip back to AC; subsequent *intervals* return to 60s. Again we
+    // need the watcher to process the event before the adapter locks
+    // in its next sleep duration.
+    bus.publish(levshell_core::Event::PowerStateChanged {
+        on_battery: false,
+    });
+    for _ in 0..8 {
+        tokio::task::yield_now().await;
+    }
+
+    tokio::time::advance(Duration::from_secs(61)).await;
+    tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("third tick never fired at +60s after returning to AC")
+        .expect("bus closed");
+    assert_eq!(sync_calls.load(Ordering::SeqCst), 3);
 
     handle.shutdown().await;
 }

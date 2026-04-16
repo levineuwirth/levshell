@@ -30,6 +30,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use levshell_config::{watch_config_dir, ConfigChange, ConfigWatcher, WatcherError};
 use levshell_core::EventBus;
 use levshell_data::{
     DataStore, EntityType, EventPatch, FlashcardPatch, ListProjects, NewProject, NotePatch,
@@ -37,9 +38,10 @@ use levshell_data::{
 };
 use thiserror::Error;
 use tokio::sync::RwLock;
+use tokio::task::JoinHandle;
 use uuid::Uuid;
 
-use crate::config::ProjectFile;
+use crate::config::{load_project_file, ProjectFile};
 
 /// Errors the registry produces. Most operations only touch the in-memory
 /// index + the data store, so the only sources are `DataError` (already
@@ -392,5 +394,95 @@ impl std::fmt::Debug for ProjectRegistry {
         f.debug_struct("ProjectRegistry")
             .field("store", &"DataStore")
             .finish_non_exhaustive()
+    }
+}
+
+impl ProjectRegistry {
+    /// Watch `dir` for changes to `*.toml` project files and
+    /// automatically upsert changes into the registry without a daemon
+    /// restart (spec §3.9). Returns a handle that owns the OS-level
+    /// watch plus the background task draining its events; dropping
+    /// it stops both.
+    ///
+    /// Behaviour on each event:
+    /// - **File created or modified**: parse and upsert. If parsing
+    ///   fails (malformed TOML, missing `name`), log a warning and
+    ///   leave the registry as-is.
+    /// - **File removed**: log an info-level message and keep the
+    ///   corresponding DB row. A filesystem deletion is not taken as
+    ///   authorization to destroy user data — the user may be renaming,
+    ///   moving across vaults, or having an editor-crash race. The
+    ///   user can remove a project explicitly via the data layer
+    ///   (future CtlRequest).
+    pub fn spawn_watcher(
+        &self,
+        dir: &Path,
+    ) -> Result<ProjectRegistryWatcher, WatcherError> {
+        let (watcher, mut rx) = watch_config_dir(dir)?;
+        let registry = self.clone();
+        let handle = tokio::spawn(async move {
+            while let Some(change) = rx.recv().await {
+                match change {
+                    ConfigChange::Upserted(path) => match load_project_file(&path) {
+                        Ok(file) => {
+                            if let Err(e) = registry.upsert_from_file(file).await {
+                                tracing::warn!(
+                                    path = %path.display(),
+                                    error = %e,
+                                    "project hot-reload: upsert failed"
+                                );
+                            } else {
+                                tracing::info!(
+                                    path = %path.display(),
+                                    "project hot-reload: upserted"
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                path = %path.display(),
+                                error = %e,
+                                "project hot-reload: failed to parse; registry unchanged"
+                            );
+                        }
+                    },
+                    ConfigChange::Removed(path) => {
+                        tracing::info!(
+                            path = %path.display(),
+                            "project hot-reload: file removed (DB row preserved)"
+                        );
+                    }
+                }
+            }
+            tracing::debug!("project hot-reload: watcher channel closed");
+        });
+        Ok(ProjectRegistryWatcher {
+            _watcher: watcher,
+            task: handle,
+        })
+    }
+}
+
+/// Handle to the project-registry hot-reload watcher. Holds the
+/// underlying OS watch and the async task draining its events. Drop to
+/// stop both; explicit [`Self::shutdown`] waits for the task to exit.
+pub struct ProjectRegistryWatcher {
+    _watcher: ConfigWatcher,
+    task: JoinHandle<()>,
+}
+
+impl ProjectRegistryWatcher {
+    /// Abort the hot-reload task and wait for it to exit. Call this on
+    /// clean daemon shutdown; `drop` does the same thing but without
+    /// awaiting the join.
+    pub async fn shutdown(self) {
+        self.task.abort();
+        let _ = self.task.await;
+    }
+}
+
+impl std::fmt::Debug for ProjectRegistryWatcher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProjectRegistryWatcher").finish_non_exhaustive()
     }
 }

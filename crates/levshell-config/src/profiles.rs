@@ -141,6 +141,80 @@ pub fn default_profiles_dir() -> Option<PathBuf> {
     levshell_config_base().map(|b| b.join("profiles"))
 }
 
+/// Watch `dir` for profile TOML changes and write the full reloaded
+/// set into `shared` whenever any file in the directory changes.
+///
+/// The replacement strategy is simple and correct: on *any* event,
+/// reload the whole directory and atomically swap the vec inside the
+/// lock. Per-file tracking would let us react more efficiently to a
+/// single-file change, but the consumer (the context engine) only
+/// reads the vec during resolves, and a full reload of ~10 profile
+/// files costs ~100µs — well within reasonable hot-reload budgets.
+///
+/// Returns a [`ProfileWatcher`] that owns the OS watch handle plus the
+/// background reload task. Dropping it stops both; explicit
+/// [`ProfileWatcher::shutdown`] waits for the task to exit cleanly.
+pub fn spawn_profile_watcher(
+    dir: &Path,
+    shared: std::sync::Arc<std::sync::RwLock<Vec<Profile>>>,
+) -> Result<ProfileWatcher, crate::WatcherError> {
+    use crate::watcher::watch_config_dir;
+
+    let (watcher, mut rx) = watch_config_dir(dir)?;
+    let dir_owned = dir.to_path_buf();
+    let task = tokio::spawn(async move {
+        while rx.recv().await.is_some() {
+            // Drain any backlogged events so rapid-fire writes only
+            // cause one reload.
+            while rx.try_recv().is_ok() {}
+            let reloaded = load_profiles_from_dir(&dir_owned);
+            let count = reloaded.len();
+            match shared.write() {
+                Ok(mut guard) => {
+                    *guard = reloaded;
+                    tracing::info!(
+                        dir = %dir_owned.display(),
+                        count,
+                        "profile hot-reload: new set applied"
+                    );
+                }
+                Err(_) => {
+                    tracing::error!(
+                        "profile hot-reload: shared lock poisoned; giving up"
+                    );
+                    return;
+                }
+            }
+        }
+        tracing::debug!("profile hot-reload: watcher channel closed");
+    });
+    Ok(ProfileWatcher {
+        _watcher: watcher,
+        task,
+    })
+}
+
+/// Handle to the profiles directory watcher. Owns the OS watch and the
+/// background reload task. Drop to stop the watch; call
+/// [`Self::shutdown`] to additionally await the task's exit.
+pub struct ProfileWatcher {
+    _watcher: crate::watcher::ConfigWatcher,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl ProfileWatcher {
+    pub async fn shutdown(self) {
+        self.task.abort();
+        let _ = self.task.await;
+    }
+}
+
+impl std::fmt::Debug for ProfileWatcher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProfileWatcher").finish_non_exhaustive()
+    }
+}
+
 /// Default sync-adapter configuration directory:
 /// `$XDG_CONFIG_HOME/levshell/sync` or `~/.config/levshell/sync`.
 /// Each adapter (Obsidian, Zotero, Anki, CalDAV, …) has its own file

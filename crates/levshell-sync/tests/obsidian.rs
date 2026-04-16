@@ -265,3 +265,68 @@ async fn nested_directories_produce_forward_slash_external_ids() {
     assert_eq!(metas.len(), 1);
     assert_eq!(metas[0].external_id, "a/b/c/deep.md");
 }
+
+#[tokio::test]
+async fn reload_config_disables_adapter_live() {
+    let vault = TempDir::new().unwrap();
+    write_file(vault.path(), "a.md", "hello");
+
+    let adapter = make_adapter(&vault);
+    let store = fresh_store().await;
+
+    // Initially enabled → probe healthy, first sync inserts.
+    assert_eq!(adapter.probe(&ctx(&store)).await, SyncStatus::Healthy);
+    let report = adapter.sync(&ctx(&store)).await.unwrap();
+    assert_eq!(report.upserted, 1);
+
+    // Reload with enabled=false → probe flips to Unavailable and sync
+    // short-circuits to an empty report.
+    let mut disabled = adapter.current_config();
+    disabled.enabled = false;
+    adapter.reload_config(disabled);
+    assert_eq!(adapter.probe(&ctx(&store)).await, SyncStatus::Unavailable);
+    let report = adapter.sync(&ctx(&store)).await.unwrap();
+    assert!(report.is_empty(), "disabled adapter must not write anything");
+}
+
+#[tokio::test]
+async fn reload_config_switches_vault_path_live() {
+    let vault_a = TempDir::new().unwrap();
+    write_file(vault_a.path(), "in_a.md", "a");
+    let vault_b = TempDir::new().unwrap();
+    write_file(vault_b.path(), "in_b.md", "b");
+
+    let adapter = make_adapter(&vault_a);
+    let store = fresh_store().await;
+
+    // Sync the first vault.
+    adapter.sync(&ctx(&store)).await.unwrap();
+    let titles = store
+        .list_notes(ListNotes::default())
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|n| n.title)
+        .collect::<std::collections::HashSet<_>>();
+    assert!(titles.contains("in_a"));
+
+    // Hot-reload onto vault B. Next sync:
+    //   - notes from vault A no longer appear on disk → they're deleted
+    //   - in_b.md appears → inserted
+    let mut switched = adapter.current_config();
+    switched.vault_path = vault_b.path().to_path_buf();
+    adapter.reload_config(switched);
+    let report = adapter.sync(&ctx(&store)).await.unwrap();
+    assert_eq!(report.upserted, 1, "vault B's in_b.md should be inserted");
+    assert_eq!(report.deleted, 1, "vault A's in_a.md should be removed");
+
+    let titles = store
+        .list_notes(ListNotes::default())
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|n| n.title)
+        .collect::<std::collections::HashSet<_>>();
+    assert!(titles.contains("in_b"));
+    assert!(!titles.contains("in_a"), "vault A's note should have been removed");
+}

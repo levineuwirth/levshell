@@ -13,8 +13,10 @@
 #![forbid(unsafe_code)]
 
 pub mod profiles;
+pub mod watcher;
 
 pub use profiles::{
-    default_profiles_dir, default_sync_dir, load_profile_file, load_profiles_from_dir, ConfigError,
-    ProfileFile,
+    default_profiles_dir, default_sync_dir, load_profile_file, load_profiles_from_dir,
+    spawn_profile_watcher, ConfigError, ProfileFile, ProfileWatcher,
 };
+pub use watcher::{watch_config_dir, ConfigChange, ConfigWatcher, WatcherError};

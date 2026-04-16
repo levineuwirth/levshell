@@ -3,9 +3,19 @@
 //! The engine owns a registry of adapters (`Arc<dyn SyncAdapter>`) and one
 //! task per adapter. Each task loops: probe → sync → sleep, publishing
 //! `SyncCompleted` on success, `SyncError` on failure, and `SyncConflict`
-//! for each entity flagged during apply. Battery mode (per spec §5.3)
-//! multiplies the adapter's poll interval by a configurable factor —
-//! delegated to the caller for now via [`SyncEngineConfig`].
+//! for each entity flagged during apply.
+//!
+//! # Power-awareness (spec §5.3)
+//!
+//! When the system is on battery, each adapter's poll interval is
+//! multiplied by [`SyncEngineConfig::battery_poll_multiplier`] (default
+//! `2.0`). The current battery state is broadcast through a
+//! [`tokio::sync::watch`] channel updated by a dedicated watcher task
+//! that subscribes to [`levshell_core::Event::PowerStateChanged`] on the
+//! bus. When the state flips, every in-flight `sleep` in every adapter
+//! task is woken so the new multiplier takes effect immediately —
+//! **not** on the next sleep. An in-flight `sync()` call is never
+//! interrupted; the change applies to the post-sync sleep.
 //!
 //! The engine deliberately does NOT manage `sync_metadata` writes — that
 //! lives inside each adapter because only the adapter knows which entity
@@ -15,30 +25,35 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use chrono::Utc;
-use levshell_core::{Event, EventBus};
+use levshell_core::{Event, EventBus, EventKind};
 use levshell_data::DataStore;
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, timeout};
 
 use crate::adapter::{SyncAdapter, SyncContext, SyncError, SyncStatus};
 
-/// Engine configuration applied uniformly across adapters.
+/// Engine configuration applied uniformly across adapters. The current
+/// on-battery state is NOT stored here — it lives in a watch channel
+/// updated by a dedicated task in response to
+/// [`Event::PowerStateChanged`] events on the bus. Pass an
+/// `initial_on_battery` value to [`SyncEngine::with_config`] if the
+/// caller knows the state at boot.
 #[derive(Debug, Clone)]
 pub struct SyncEngineConfig {
-    /// Multiplier applied to every adapter's poll interval when
-    /// [`Self::on_battery`] is true. Defaults to `2.0` per spec §5.3.
+    /// Multiplier applied to every adapter's poll interval when the
+    /// system is on battery. Defaults to `2.0` per spec §5.3.
     pub battery_poll_multiplier: f32,
-    /// Whether the engine should currently treat the system as on battery.
-    /// Typically wired to the `PowerStateChanged` event on the bus.
-    pub on_battery: bool,
+    /// Initial value for the on-battery flag. Subsequent updates come
+    /// from `PowerStateChanged` events on the bus.
+    pub initial_on_battery: bool,
 }
 
 impl Default for SyncEngineConfig {
     fn default() -> Self {
         Self {
             battery_poll_multiplier: 2.0,
-            on_battery: false,
+            initial_on_battery: false,
         }
     }
 }
@@ -49,6 +64,7 @@ impl Default for SyncEngineConfig {
 pub struct SyncEngineHandle {
     tasks: Vec<JoinHandle<()>>,
     shutdown_tx: Vec<oneshot::Sender<()>>,
+    battery_watcher: Option<JoinHandle<()>>,
 }
 
 impl SyncEngineHandle {
@@ -60,6 +76,10 @@ impl SyncEngineHandle {
         }
         for task in self.tasks {
             let _ = task.await;
+        }
+        if let Some(w) = self.battery_watcher {
+            w.abort();
+            let _ = w.await;
         }
     }
 
@@ -106,8 +126,16 @@ impl SyncEngine {
 
     /// Launch a task per registered adapter. Consumes `self` — the engine's
     /// state is moved into the tasks, and further configuration is via
-    /// bus events (future work).
+    /// bus events.
     pub fn spawn(self) -> SyncEngineHandle {
+        // Shared battery state backed by a `watch` channel so that (1)
+        // adapter tasks read the current value without locking, and (2)
+        // an in-flight sleep can be interrupted as soon as the state
+        // flips — the adapter recomputes and restarts its sleep with
+        // the new interval.
+        let (battery_tx, battery_rx) = watch::channel(self.config.initial_on_battery);
+        let battery_watcher = spawn_battery_watcher(self.bus.clone(), battery_tx);
+
         let mut tasks = Vec::with_capacity(self.adapters.len());
         let mut shutdown_tx = Vec::with_capacity(self.adapters.len());
         for adapter in self.adapters {
@@ -116,11 +144,47 @@ impl SyncEngine {
             let store = self.store.clone();
             let bus = self.bus.clone();
             let config = self.config.clone();
-            let handle = tokio::spawn(adapter_loop(adapter, store, bus, config, rx));
+            let battery_rx = battery_rx.clone();
+            let handle =
+                tokio::spawn(adapter_loop(adapter, store, bus, config, battery_rx, rx));
             tasks.push(handle);
         }
-        SyncEngineHandle { tasks, shutdown_tx }
+        SyncEngineHandle {
+            tasks,
+            shutdown_tx,
+            battery_watcher: Some(battery_watcher),
+        }
     }
+}
+
+/// Background task that updates the shared battery watch channel
+/// whenever a [`Event::PowerStateChanged`] fires on the bus. Lives for
+/// as long as the engine. Aborted during [`SyncEngineHandle::shutdown`].
+fn spawn_battery_watcher(bus: EventBus, battery_tx: watch::Sender<bool>) -> JoinHandle<()> {
+    // Capacity 8: PowerStateChanged is rare (AC plug / unplug), but give
+    // some headroom so a storm of spurious events doesn't get us dropped
+    // by the bus.
+    let mut rx = bus.subscribe("sync-engine-battery-watcher", [EventKind::PowerStateChanged], 8);
+    tokio::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            if let Event::PowerStateChanged { on_battery: new_state } = event {
+                // send_if_modified suppresses the notification when the
+                // value didn't actually change, so spurious duplicate
+                // events don't kick adapter loops awake for no reason.
+                let changed = battery_tx.send_if_modified(|current| {
+                    if *current != new_state {
+                        *current = new_state;
+                        true
+                    } else {
+                        false
+                    }
+                });
+                if changed {
+                    tracing::info!(on_battery = new_state, "sync engine updated battery mode");
+                }
+            }
+        }
+    })
 }
 
 async fn adapter_loop(
@@ -128,6 +192,7 @@ async fn adapter_loop(
     store: DataStore,
     bus: EventBus,
     config: SyncEngineConfig,
+    mut battery_rx: watch::Receiver<bool>,
     mut shutdown_rx: oneshot::Receiver<()>,
 ) {
     let name = adapter.name().to_string();
@@ -153,16 +218,43 @@ async fn adapter_loop(
             }
         }
 
-        // Sleep until the next tick, honouring battery mode. The sleep is
-        // interruptible by the shutdown signal so tests and clean
-        // shutdowns do not have to wait out the full interval.
-        let interval = effective_interval(&adapter, &config);
+        // Sleep until the next tick, interruptible by battery flips and
+        // shutdown. On battery change we fall back through the loop
+        // without performing another sync — we just reschedule the
+        // sleep with the new interval. This matches the spec's intent
+        // ("poll intervals are multiplied when on battery") while
+        // avoiding a spurious sync every time the user plugs/unplugs.
+        if !interruptible_sleep(&adapter, &config, &mut battery_rx, &mut shutdown_rx).await {
+            tracing::info!(provider = %name, "sync adapter loop shutting down");
+            return;
+        }
+    }
+}
+
+/// Sleep for the current effective interval, restarting whenever the
+/// battery state flips (so the new multiplier takes effect immediately).
+/// Returns `true` on natural completion, `false` if shutdown was
+/// requested during the sleep.
+async fn interruptible_sleep(
+    adapter: &Arc<dyn SyncAdapter>,
+    config: &SyncEngineConfig,
+    battery_rx: &mut watch::Receiver<bool>,
+    shutdown_rx: &mut oneshot::Receiver<()>,
+) -> bool {
+    loop {
+        let on_battery = *battery_rx.borrow();
+        let interval = effective_interval(adapter, config, on_battery);
         tokio::select! {
-            _ = sleep(interval) => {}
-            _ = &mut shutdown_rx => {
-                tracing::info!(provider = %name, "sync adapter loop shutting down");
-                return;
+            _ = sleep(interval) => return true,
+            changed = battery_rx.changed() => {
+                if changed.is_err() {
+                    // Watcher sender dropped; engine is shutting down.
+                    return false;
+                }
+                // Loop around and recompute with the new state.
+                continue;
             }
+            _ = &mut *shutdown_rx => return false,
         }
     }
 }
@@ -228,9 +320,10 @@ async fn run_sync_once(
 fn effective_interval(
     adapter: &Arc<dyn SyncAdapter>,
     config: &SyncEngineConfig,
+    on_battery: bool,
 ) -> std::time::Duration {
     let base = adapter.poll_interval();
-    if config.on_battery && config.battery_poll_multiplier > 1.0 {
+    if on_battery && config.battery_poll_multiplier > 1.0 {
         let millis = base.as_millis() as f32 * config.battery_poll_multiplier;
         std::time::Duration::from_millis(millis.round() as u64)
     } else {

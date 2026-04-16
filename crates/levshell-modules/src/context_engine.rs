@@ -37,6 +37,7 @@
 //! * User overrides are not yet plumbed in from a config file or ctl.
 
 use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -81,7 +82,14 @@ pub struct ContextEngineModule {
     publisher: WidgetPublisher,
     widgets: Vec<WidgetDef>,
     rules: Vec<CompiledRule>,
-    profiles: Vec<Profile>,
+    /// Shared so an external watcher (the daemon's
+    /// `profiles/` inotify watcher, per spec §3.9) can atomically
+    /// replace the profile set at runtime without tearing down the
+    /// module. Held behind [`std::sync::RwLock`] rather than
+    /// [`tokio::sync::RwLock`] because every read is brief (a
+    /// name-to-profile lookup that clones out the matching profile)
+    /// and no read is held across an `.await`.
+    profiles: Arc<RwLock<Vec<Profile>>>,
     active_profile: Option<String>,
     signals: SignalContext,
     user_overrides: HashMap<String, Prominence>,
@@ -106,7 +114,7 @@ impl ContextEngineModule {
             publisher,
             widgets: Vec::new(),
             rules: Vec::new(),
-            profiles: Vec::new(),
+            profiles: Arc::new(RwLock::new(Vec::new())),
             active_profile: None,
             signals: SignalContext::new(),
             user_overrides: HashMap::new(),
@@ -128,7 +136,23 @@ impl ContextEngineModule {
         self
     }
 
-    pub fn with_profiles(mut self, profiles: Vec<Profile>) -> Self {
+    pub fn with_profiles(self, profiles: Vec<Profile>) -> Self {
+        {
+            let mut guard = self
+                .profiles
+                .write()
+                .expect("context-engine profile lock poisoned");
+            *guard = profiles;
+        }
+        self
+    }
+
+    /// Replace the internal profile-sharing handle. Use when the
+    /// caller wants to hand the same `Arc<RwLock<Vec<Profile>>>` to
+    /// both the module and an external watcher (spec §3.9 hot-reload):
+    /// the watcher writes into the lock, the module reads from it on
+    /// every resolve.
+    pub fn with_shared_profiles(mut self, profiles: Arc<RwLock<Vec<Profile>>>) -> Self {
         self.profiles = profiles;
         self
     }
@@ -146,17 +170,30 @@ impl ContextEngineModule {
         self
     }
 
-    fn active_profile_ref(&self) -> Option<&Profile> {
-        self.active_profile
-            .as_ref()
-            .and_then(|name| self.profiles.iter().find(|p| &p.name == name))
+    /// A clone of the shared profiles handle. Hand this to an external
+    /// watcher that wants to replace the profile set at runtime (spec
+    /// §3.9 — configuration is hot-reloadable via inotify). Writing a
+    /// new `Vec<Profile>` into the lock takes effect on the next
+    /// resolve pass; in-flight resolves are unaffected.
+    pub fn shared_profiles(&self) -> Arc<RwLock<Vec<Profile>>> {
+        self.profiles.clone()
+    }
+
+    fn active_profile_snapshot(&self) -> Option<Profile> {
+        let name = self.active_profile.as_ref()?;
+        self.profiles
+            .read()
+            .expect("context-engine profile lock poisoned")
+            .iter()
+            .find(|p| &p.name == name)
+            .cloned()
     }
 
     /// Recompute the cascade, feed it through hysteresis at `now`, and push
     /// any deltas to the publisher. Returns the committed prominences so
     /// tests can inspect the state without racing the publisher.
     fn resolve_and_publish(&mut self, now: Instant) -> HashMap<String, Prominence> {
-        let active = self.active_profile_ref().cloned();
+        let active = self.active_profile_snapshot();
         // Coerce the fn-pointer field to a `&dyn Fn(...)` so the cascade's
         // `&WidgetWidthFn` parameter accepts it. Function pointers implement
         // `Fn`, so an explicit closure wrapper is the simplest coercion.
@@ -293,7 +330,13 @@ impl ContextEngineModule {
         match action {
             "activate" => {
                 if let Some(target) = name {
-                    if self.profiles.iter().any(|p| p.name == target) {
+                    let exists = self
+                        .profiles
+                        .read()
+                        .expect("context-engine profile lock poisoned")
+                        .iter()
+                        .any(|p| p.name == target);
+                    if exists {
                         self.active_profile = Some(target.to_owned());
                     } else {
                         tracing::warn!(
@@ -304,12 +347,19 @@ impl ContextEngineModule {
                 }
             }
             "cycle" => {
-                if self.profiles.is_empty() {
-                    return;
-                }
-                let mut names: Vec<&str> =
-                    self.profiles.iter().map(|p| p.name.as_str()).collect();
-                names.sort();
+                let names: Vec<String> = {
+                    let guard = self
+                        .profiles
+                        .read()
+                        .expect("context-engine profile lock poisoned");
+                    if guard.is_empty() {
+                        return;
+                    }
+                    let mut n: Vec<String> = guard.iter().map(|p| p.name.clone()).collect();
+                    n.sort();
+                    n
+                };
+                let names: Vec<&str> = names.iter().map(String::as_str).collect();
                 let next = match self.active_profile.as_deref() {
                     None => names[0],
                     Some(current) => {

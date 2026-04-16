@@ -35,4 +35,6 @@ pub use adapter::{
     Result, SyncAdapter, SyncConflict, SyncContext, SyncError, SyncReport, SyncStatus,
 };
 pub use engine::{SyncEngine, SyncEngineConfig, SyncEngineHandle};
-pub use obsidian::{ObsidianAdapter, ObsidianConfig, ObsidianConfigError};
+pub use obsidian::{
+    ObsidianAdapter, ObsidianConfig, ObsidianConfigError, ObsidianConfigWatcher,
+};

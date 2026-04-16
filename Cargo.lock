@@ -617,6 +617,7 @@ dependencies = [
  "serde",
  "tempfile",
  "thiserror 1.0.69",
+ "tokio",
  "toml",
  "tracing",
 ]
@@ -729,6 +730,7 @@ name = "levshell-projects"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "levshell-config",
  "levshell-core",
  "levshell-data",
  "serde",

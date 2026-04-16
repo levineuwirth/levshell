@@ -11,10 +11,11 @@ description = "Levshell project registry: loads TOML-defined projects, upserts t
 [dependencies]
 levshell-core.workspace = true
 levshell-data.workspace = true
+levshell-config.workspace = true
 chrono.workspace = true
 serde.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["rt", "sync"] }
+tokio = { workspace = true, features = ["rt", "sync", "macros"] }
 toml.workspace = true
 tracing.workspace = true
 uuid.workspace = true

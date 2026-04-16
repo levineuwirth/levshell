@@ -28,4 +28,6 @@ pub use config::{
     default_projects_dir, load_project_file, load_projects_from_dir, ProjectFile,
     ProjectRegistryConfigError,
 };
-pub use registry::{ProjectEntry, ProjectMetadata, ProjectRegistry, ProjectRegistryError};
+pub use registry::{
+    ProjectEntry, ProjectMetadata, ProjectRegistry, ProjectRegistryError, ProjectRegistryWatcher,
+};

@@ -414,3 +414,89 @@ status = "simmering"
     assert_eq!(listed[0].metadata.tags, vec!["first"]);
     assert_eq!(listed[1].project.status, ProjectStatus::Simmering);
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn spawn_watcher_hot_reloads_added_and_modified_files() {
+    use std::time::Duration;
+
+    let store = fresh_store().await;
+    let bus = EventBus::new();
+    let dir = tempfile::tempdir().unwrap();
+
+    // Start empty.
+    let registry = ProjectRegistry::load_from_dir(store, bus, dir.path())
+        .await
+        .unwrap();
+    assert!(registry.list().await.is_empty());
+
+    let _watcher = registry.spawn_watcher(dir.path()).unwrap();
+
+    // Writing a new project file should surface in the registry.
+    std::fs::write(dir.path().join("alpha.toml"), r#"name = "Alpha""#).unwrap();
+
+    let mut waited = Duration::ZERO;
+    let step = Duration::from_millis(50);
+    while waited < Duration::from_secs(5) {
+        if registry.find_by_name("Alpha").await.is_some() {
+            break;
+        }
+        tokio::time::sleep(step).await;
+        waited += step;
+    }
+    assert!(
+        registry.find_by_name("Alpha").await.is_some(),
+        "hot-reload never picked up the new file within 5s"
+    );
+
+    // Overwriting the file with a status change should also land.
+    std::fs::write(
+        dir.path().join("alpha.toml"),
+        r#"name = "Alpha"
+status = "writing_up"
+"#,
+    )
+    .unwrap();
+
+    let mut waited = Duration::ZERO;
+    loop {
+        let entry = registry.find_by_name("Alpha").await.unwrap();
+        if entry.project.status == levshell_data::ProjectStatus::WritingUp {
+            break;
+        }
+        if waited >= Duration::from_secs(5) {
+            panic!("modify never reflected after 5s: status still {:?}", entry.project.status);
+        }
+        tokio::time::sleep(step).await;
+        waited += step;
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn removed_project_file_preserves_db_row() {
+    use std::time::Duration;
+
+    let store = fresh_store().await;
+    let bus = EventBus::new();
+    let dir = tempfile::tempdir().unwrap();
+
+    std::fs::write(dir.path().join("keep.toml"), r#"name = "Keep""#).unwrap();
+    let registry = ProjectRegistry::load_from_dir(store.clone(), bus, dir.path())
+        .await
+        .unwrap();
+    let _watcher = registry.spawn_watcher(dir.path()).unwrap();
+    let id_before = registry.find_by_name("Keep").await.unwrap().project.id;
+
+    // Remove the file on disk. The registry's IN-MEMORY index *may*
+    // eventually be rebuilt to reflect this (future work), but the
+    // underlying DB row must NOT be destroyed on filesystem absence —
+    // a user renaming a file produces Remove+Create as a pair, and we
+    // can't tell them apart deterministically.
+    std::fs::remove_file(dir.path().join("keep.toml")).unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let row = store.get_project(id_before).await.unwrap();
+    assert!(
+        row.is_some(),
+        "DB row for a project must survive removal of its TOML file"
+    );
+}
