@@ -665,6 +665,7 @@ dependencies = [
  "levshell-data",
  "levshell-ipc",
  "levshell-modules",
+ "levshell-projects",
  "levshell-sync",
  "serde_json",
  "tempfile",
@@ -672,6 +673,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -720,6 +722,22 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "levshell-projects"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "levshell-core",
+ "levshell-data",
+ "serde",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "toml",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

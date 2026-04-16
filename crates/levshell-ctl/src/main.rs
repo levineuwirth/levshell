@@ -54,6 +54,48 @@ enum Command {
         #[command(subcommand)]
         action: PaletteCmd,
     },
+
+    /// List registered projects (from `~/.config/levshell/projects/`).
+    Projects,
+
+    /// Attach an entity to a project. Entity types:
+    /// `note`, `ref`, `flashcard`, `event`, `task`. The `project`
+    /// argument is either the project name or its UUID.
+    Attach {
+        #[arg(value_enum)]
+        entity_type: CliEntityType,
+        entity_id: String,
+        project: String,
+    },
+
+    /// Detach an entity from its current project. Experiments cannot
+    /// be detached (their `project_id` is required).
+    Detach {
+        #[arg(value_enum)]
+        entity_type: CliEntityType,
+        entity_id: String,
+    },
+}
+
+#[derive(Debug, Copy, Clone, ValueEnum)]
+enum CliEntityType {
+    Note,
+    Ref,
+    Flashcard,
+    Event,
+    Task,
+}
+
+impl CliEntityType {
+    fn as_wire(self) -> &'static str {
+        match self {
+            CliEntityType::Note => "note",
+            CliEntityType::Ref => "ref",
+            CliEntityType::Flashcard => "flashcard",
+            CliEntityType::Event => "event",
+            CliEntityType::Task => "task",
+        }
+    }
 }
 
 #[derive(Debug, Copy, Clone, ValueEnum)]
@@ -185,6 +227,23 @@ fn build_request(cmd: Command) -> CtlRequest {
                 query: Some(query),
             },
         },
+        Command::Projects => CtlRequest::Projects,
+        Command::Attach {
+            entity_type,
+            entity_id,
+            project,
+        } => CtlRequest::Attach {
+            entity_type: entity_type.as_wire().to_string(),
+            entity_id,
+            project,
+        },
+        Command::Detach {
+            entity_type,
+            entity_id,
+        } => CtlRequest::Detach {
+            entity_type: entity_type.as_wire().to_string(),
+            entity_id,
+        },
     }
 }
 
@@ -198,6 +257,21 @@ fn print_response(response: &CtlResponse) {
             println!("db_path:          {}", s.db_path);
             println!("shell_connected:  {}", s.shell_connected);
             println!("module_count:     {}", s.module_count);
+        }
+        CtlResponse::Projects { projects } => {
+            if projects.is_empty() {
+                println!("(no projects registered)");
+                return;
+            }
+            for p in projects {
+                let tags = if p.tags.is_empty() {
+                    String::new()
+                } else {
+                    format!(" [{}]", p.tags.join(", "))
+                };
+                let color = p.accent_color.as_deref().unwrap_or("");
+                println!("{}  {}  {}{}  {}", p.id, p.status, p.name, tags, color);
+            }
         }
         CtlResponse::Error { message } => {
             eprintln!("error: {message}");

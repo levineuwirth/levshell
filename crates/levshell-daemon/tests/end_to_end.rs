@@ -130,6 +130,7 @@ async fn daemon_publishes_widget_update_over_ipc_to_a_unixstream_shell() {
         db_path,
         socket_path: socket_path.clone(),
         publisher_capacity: 16,
+            projects_dir: None,
     };
 
     let factory: ModuleFactory = Box::new(|bus, publisher, _store| {
@@ -223,6 +224,7 @@ async fn boot_daemon(
         db_path,
         socket_path: socket_path.clone(),
         publisher_capacity: 16,
+            projects_dir: None,
     };
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
     let shutdown: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
@@ -346,6 +348,7 @@ async fn ctl_and_shell_coexist_with_shell_receiving_updates() {
         db_path,
         socket_path: socket_path.clone(),
         publisher_capacity: 16,
+            projects_dir: None,
     };
     let factory: ModuleFactory = Box::new(|bus, publisher, _store| {
         vec![Box::new(FakeModule { bus, publisher }) as Box<dyn Module>]
@@ -398,6 +401,7 @@ async fn memory_module_publishes_initial_widget_update_over_ipc() {
         db_path,
         socket_path: socket_path.clone(),
         publisher_capacity: 64,
+            projects_dir: None,
     };
     let factory: ModuleFactory = Box::new(|_bus, publisher, _store| {
         vec![Box::new(MemoryModule::new(publisher)) as Box<dyn Module>]
@@ -496,6 +500,7 @@ async fn context_engine_publishes_initial_bar_layout_on_shell_connect() {
         db_path,
         socket_path: socket_path.clone(),
         publisher_capacity: 64,
+            projects_dir: None,
     };
     let factory: ModuleFactory = Box::new(|_bus, publisher, _store| {
         vec![Box::new(default_context_engine(publisher)) as Box<dyn Module>]
@@ -549,6 +554,7 @@ async fn ctl_density_change_triggers_context_engine_republish() {
         db_path,
         socket_path: socket_path.clone(),
         publisher_capacity: 64,
+            projects_dir: None,
     };
     let factory: ModuleFactory = Box::new(|_bus, publisher, _store| {
         let rule = CompiledRule::new(
@@ -669,6 +675,7 @@ async fn ctl_palette_open_publishes_widget_update_with_results() {
         db_path,
         socket_path: socket_path.clone(),
         publisher_capacity: 64,
+            projects_dir: None,
     };
     let factory: ModuleFactory = Box::new(|_bus, publisher, _store| {
         let palette = PaletteModule::new(publisher)
@@ -800,6 +807,7 @@ async fn daemon_runs_obsidian_adapter_against_tempdir_vault() {
         db_path: db_path.clone(),
         socket_path: socket_path.clone(),
         publisher_capacity: 16,
+            projects_dir: None,
     };
     let factory = empty_factory();
 
@@ -871,6 +879,7 @@ async fn daemon_boots_with_empty_sync_factory() {
         db_path,
         socket_path: socket_path.clone(),
         publisher_capacity: 16,
+            projects_dir: None,
     };
 
     let sync_factory: SyncAdapterFactory = Box::new(Vec::new);
@@ -888,6 +897,177 @@ async fn daemon_boots_with_empty_sync_factory() {
     // Sanity-check that the daemon is responsive.
     let response = ctl_round_trip(&socket_path, CtlRequest::Ping).await;
     assert!(matches!(response, CtlResponse::Pong));
+
+    let _ = shutdown_tx.send(());
+    let _ = tokio::time::timeout(Duration::from_secs(3), handle)
+        .await
+        .expect("daemon to exit");
+}
+
+// ---------------------------------------------------------------------------
+// Project registry + ctl attach/detach (phase 2.4)
+// ---------------------------------------------------------------------------
+
+/// End-to-end: start the daemon with a projects directory on disk,
+/// connect a ctl client, list projects, attach a note, detach it. Proves
+/// the full ctl → project_registry → data_store chain works over the
+/// real IPC socket.
+#[tokio::test]
+async fn ctl_attach_and_detach_note_via_project_registry() {
+    use levshell_data::NewNote;
+
+    let (_dir, db_path, socket_path) = temp_paths();
+
+    // Prepare a projects directory with one TOML file.
+    let projects_dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        projects_dir.path().join("target.toml"),
+        r#"name = "Target"
+tags = ["demo"]
+"#,
+    )
+    .unwrap();
+
+    let config = DaemonConfig {
+        db_path: db_path.clone(),
+        socket_path: socket_path.clone(),
+        publisher_capacity: 16,
+        projects_dir: Some(projects_dir.path().to_path_buf()),
+    };
+
+    // Pre-seed a note in the store so the ctl client has something to
+    // attach.
+    let store = DataStore::open(&db_path).await.unwrap();
+    let note = store
+        .insert_note(NewNote {
+            title: "To be attached".into(),
+            content: "body".into(),
+            project_id: None,
+        })
+        .await
+        .unwrap();
+    drop(store);
+
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let shutdown: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
+        Box::pin(async move {
+            let _ = shutdown_rx.await;
+        });
+    let handle = tokio::spawn(async move { run(config, empty_factory(), shutdown).await });
+    wait_for_socket(&socket_path).await;
+
+    // Projects list should contain our seeded project.
+    let resp = ctl_round_trip(&socket_path, CtlRequest::Projects).await;
+    let projects = match resp {
+        CtlResponse::Projects { projects: p } => p,
+        other => panic!("expected Projects, got {other:?}"),
+    };
+    assert_eq!(projects.len(), 1);
+    assert_eq!(projects[0].name, "Target");
+    assert_eq!(projects[0].tags, vec!["demo"]);
+    let project_id = projects[0].id.clone();
+
+    // Attach by name.
+    let resp = ctl_round_trip(
+        &socket_path,
+        CtlRequest::Attach {
+            entity_type: "note".into(),
+            entity_id: note.id.to_string(),
+            project: "Target".into(),
+        },
+    )
+    .await;
+    assert!(matches!(resp, CtlResponse::Ok));
+
+    // Verify the attach landed in the store.
+    let store = DataStore::open(&db_path).await.unwrap();
+    let attached = store.get_note(note.id).await.unwrap().unwrap();
+    assert!(attached.project_id.is_some());
+    assert_eq!(attached.project_id.unwrap().to_string(), project_id);
+    drop(store);
+
+    // Detach.
+    let resp = ctl_round_trip(
+        &socket_path,
+        CtlRequest::Detach {
+            entity_type: "note".into(),
+            entity_id: note.id.to_string(),
+        },
+    )
+    .await;
+    assert!(matches!(resp, CtlResponse::Ok));
+
+    let store = DataStore::open(&db_path).await.unwrap();
+    let detached = store.get_note(note.id).await.unwrap().unwrap();
+    assert!(detached.project_id.is_none());
+    drop(store);
+
+    // Attach by UUID string (should also work).
+    let resp = ctl_round_trip(
+        &socket_path,
+        CtlRequest::Attach {
+            entity_type: "note".into(),
+            entity_id: note.id.to_string(),
+            project: project_id.clone(),
+        },
+    )
+    .await;
+    assert!(matches!(resp, CtlResponse::Ok));
+
+    // Unknown project returns an Error response.
+    let resp = ctl_round_trip(
+        &socket_path,
+        CtlRequest::Attach {
+            entity_type: "note".into(),
+            entity_id: note.id.to_string(),
+            project: "nonexistent".into(),
+        },
+    )
+    .await;
+    assert!(matches!(resp, CtlResponse::Error { .. }));
+
+    let _ = shutdown_tx.send(());
+    let _ = tokio::time::timeout(Duration::from_secs(3), handle)
+        .await
+        .expect("daemon to exit");
+}
+
+/// When no projects_dir is configured, attach/detach/projects all return
+/// a clean error explaining the situation.
+#[tokio::test]
+async fn ctl_attach_without_registry_returns_error() {
+    let (_dir, db_path, socket_path) = temp_paths();
+    let config = DaemonConfig {
+        db_path,
+        socket_path: socket_path.clone(),
+        publisher_capacity: 16,
+        projects_dir: None,
+    };
+
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let shutdown: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
+        Box::pin(async move {
+            let _ = shutdown_rx.await;
+        });
+    let handle = tokio::spawn(async move { run(config, empty_factory(), shutdown).await });
+    wait_for_socket(&socket_path).await;
+
+    let resp = ctl_round_trip(&socket_path, CtlRequest::Projects).await;
+    let CtlResponse::Error { message } = resp else {
+        panic!("expected Error, got {resp:?}");
+    };
+    assert!(message.contains("project registry not configured"));
+
+    let resp = ctl_round_trip(
+        &socket_path,
+        CtlRequest::Attach {
+            entity_type: "note".into(),
+            entity_id: uuid::Uuid::now_v7().to_string(),
+            project: "anything".into(),
+        },
+    )
+    .await;
+    assert!(matches!(resp, CtlResponse::Error { .. }));
 
     let _ = shutdown_tx.send(());
     let _ = tokio::time::timeout(Duration::from_secs(3), handle)

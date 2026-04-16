@@ -36,12 +36,13 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use levshell_core::{Event, EventBus, Module, ModuleRunner};
-use levshell_data::DataStore;
+use levshell_data::{DataStore, EntityType};
 use levshell_ipc::{
     default_socket_path, spawn_writer_task, BarDensity, ClientRole, CtlRequest, CtlResponse, Hello,
-    IpcConnection, IpcServer, JsonCodec, PaletteAction, ProfileAction, ShellMessage,
-    StatusSnapshot, WidgetPublisher, PROTOCOL_VERSION,
+    IpcConnection, IpcServer, JsonCodec, PaletteAction, ProfileAction, ProjectSummary,
+    ShellMessage, StatusSnapshot, WidgetPublisher, PROTOCOL_VERSION,
 };
+use levshell_projects::{ProjectRegistry, ProjectRegistryError};
 use levshell_sync::{SyncAdapter, SyncEngine, SyncEngineHandle};
 use thiserror::Error;
 use tokio::sync::oneshot;
@@ -65,17 +66,24 @@ pub struct DaemonConfig {
     pub socket_path: PathBuf,
     /// Channel capacity between modules and the IPC writer task.
     pub publisher_capacity: usize,
+    /// Directory containing per-project TOML files. `None` skips the
+    /// project-registry load entirely; the daemon still accepts attach /
+    /// detach CtlRequests but returns an error pointing at the missing
+    /// config dir.
+    pub projects_dir: Option<PathBuf>,
 }
 
 impl DaemonConfig {
     /// Defaults appropriate for the production binary:
-    /// `$XDG_DATA_HOME/levshell/levshell.db` (or `~/.local/share/...`) and
-    /// `$XDG_RUNTIME_DIR/levshell.sock`.
+    /// `$XDG_DATA_HOME/levshell/levshell.db` (or `~/.local/share/...`),
+    /// `$XDG_RUNTIME_DIR/levshell.sock`, and
+    /// `$XDG_CONFIG_HOME/levshell/projects/`.
     pub fn with_defaults() -> Result<Self> {
         Ok(Self {
             db_path: default_db_path()?,
             socket_path: default_socket_path().context("resolving default socket path")?,
             publisher_capacity: 256,
+            projects_dir: levshell_projects::default_projects_dir(),
         })
     }
 }
@@ -128,6 +136,10 @@ struct SharedState {
     db_path: PathBuf,
     shell_connected: Arc<AtomicBool>,
     module_count: Arc<AtomicUsize>,
+    /// Project registry — used by `ctl attach/detach/projects` dispatch.
+    /// `None` only when no projects directory was configured; every
+    /// attach/detach against a `None` registry returns a clean error.
+    projects: Option<ProjectRegistry>,
 }
 
 /// The daemon entry point. See the module-level docs for the lifecycle.
@@ -174,6 +186,31 @@ pub async fn run_with_sync(
     // 2. Build the event bus.
     let bus = EventBus::new();
 
+    // 2a. Load the project registry from `~/.config/levshell/projects/`.
+    // Each TOML file declares a project that's upserted into the store
+    // and indexed for attach / detach / lookup. Missing directory or
+    // parse errors do not fail boot — unconfigured is a valid state.
+    let projects = if let Some(dir) = config.projects_dir.clone() {
+        let dir_str = dir.display().to_string();
+        match ProjectRegistry::load_from_dir(store.clone(), bus.clone(), &dir).await {
+            Ok(r) => {
+                let count = r.list().await.len();
+                tracing::info!(dir = %dir_str, count, "project registry loaded");
+                Some(r)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    dir = %dir_str,
+                    error = %e,
+                    "failed to load project registry; continuing without it"
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     // 2b. Start the sync engine before binding the IPC server. Sync runs
     // independently of shell connection state — the shell may come and go
     // but the daemon keeps pulling from external sources.
@@ -193,6 +230,7 @@ pub async fn run_with_sync(
         db_path: config.db_path.clone(),
         shell_connected: Arc::new(AtomicBool::new(false)),
         module_count: Arc::new(AtomicUsize::new(0)),
+        projects: projects.clone(),
     };
 
     // The factory is a FnOnce, but the accept loop runs many times. Wrap it
@@ -498,7 +536,7 @@ async fn handle_ctl_connection(
         }
     };
 
-    let response = dispatch_ctl_request(request, &state);
+    let response = dispatch_ctl_request(request, &state).await;
 
     if let Err(e) = writer.send(&response).await {
         tracing::warn!(error = %e, "ctl: failed to send response");
@@ -508,8 +546,10 @@ async fn handle_ctl_connection(
 
 /// Map a [`CtlRequest`] to its [`CtlResponse`], publishing bus events for
 /// action requests. Separated out so tests can hit the dispatch logic
-/// directly without a socket.
-fn dispatch_ctl_request(request: CtlRequest, state: &SharedState) -> CtlResponse {
+/// directly without a socket. Async because some variants
+/// (`Attach`/`Detach`/`Projects`) write to the data store through the
+/// project registry.
+async fn dispatch_ctl_request(request: CtlRequest, state: &SharedState) -> CtlResponse {
     match request {
         CtlRequest::Ping => CtlResponse::Pong,
 
@@ -560,11 +600,129 @@ fn dispatch_ctl_request(request: CtlRequest, state: &SharedState) -> CtlResponse
             CtlResponse::Ok
         }
 
+        CtlRequest::Projects => dispatch_projects(state).await,
+
+        CtlRequest::Attach {
+            entity_type,
+            entity_id,
+            project,
+        } => dispatch_attach(state, &entity_type, &entity_id, &project).await,
+
+        CtlRequest::Detach {
+            entity_type,
+            entity_id,
+        } => dispatch_detach(state, &entity_type, &entity_id).await,
+
         // `CtlRequest` is `#[non_exhaustive]`, so future variants land here
         // as a soft rejection instead of breaking the build.
         _ => CtlResponse::Error {
             message: "unsupported ctl request for this daemon version".into(),
         },
+    }
+}
+
+async fn dispatch_projects(state: &SharedState) -> CtlResponse {
+    let Some(registry) = state.projects.as_ref() else {
+        return CtlResponse::Error {
+            message: "project registry not configured (no projects_dir)".into(),
+        };
+    };
+    let entries = registry.list().await;
+    let summaries = entries
+        .into_iter()
+        .map(|e| ProjectSummary {
+            id: e.project.id.to_string(),
+            name: e.project.name,
+            status: e.project.status.as_str().to_string(),
+            tags: e.metadata.tags,
+            workspace_names: e.metadata.workspace_names,
+            accent_color: e.metadata.accent_color,
+        })
+        .collect();
+    CtlResponse::Projects {
+        projects: summaries,
+    }
+}
+
+async fn dispatch_attach(
+    state: &SharedState,
+    entity_type: &str,
+    entity_id: &str,
+    project: &str,
+) -> CtlResponse {
+    let Some(registry) = state.projects.as_ref() else {
+        return CtlResponse::Error {
+            message: "project registry not configured (no projects_dir)".into(),
+        };
+    };
+    let Some(et) = parse_entity_type(entity_type) else {
+        return CtlResponse::Error {
+            message: format!(
+                "unknown entity type: {entity_type:?} (expected note, ref, flashcard, event, task)"
+            ),
+        };
+    };
+    let id = match uuid::Uuid::parse_str(entity_id) {
+        Ok(id) => id,
+        Err(e) => {
+            return CtlResponse::Error {
+                message: format!("invalid entity id {entity_id:?}: {e}"),
+            }
+        }
+    };
+    let project_id = match registry.resolve(project).await {
+        Ok(id) => id,
+        Err(e) => return ctl_error_from_registry(e),
+    };
+    match registry.attach(et, id, project_id).await {
+        Ok(()) => CtlResponse::Ok,
+        Err(e) => ctl_error_from_registry(e),
+    }
+}
+
+async fn dispatch_detach(state: &SharedState, entity_type: &str, entity_id: &str) -> CtlResponse {
+    let Some(registry) = state.projects.as_ref() else {
+        return CtlResponse::Error {
+            message: "project registry not configured (no projects_dir)".into(),
+        };
+    };
+    let Some(et) = parse_entity_type(entity_type) else {
+        return CtlResponse::Error {
+            message: format!(
+                "unknown entity type: {entity_type:?} (expected note, ref, flashcard, event, task)"
+            ),
+        };
+    };
+    let id = match uuid::Uuid::parse_str(entity_id) {
+        Ok(id) => id,
+        Err(e) => {
+            return CtlResponse::Error {
+                message: format!("invalid entity id {entity_id:?}: {e}"),
+            }
+        }
+    };
+    match registry.detach(et, id).await {
+        Ok(()) => CtlResponse::Ok,
+        Err(e) => ctl_error_from_registry(e),
+    }
+}
+
+fn parse_entity_type(s: &str) -> Option<EntityType> {
+    match s {
+        "note" => Some(EntityType::Note),
+        "ref" | "reference" => Some(EntityType::Reference),
+        "flashcard" => Some(EntityType::Flashcard),
+        "event" => Some(EntityType::Event),
+        "task" => Some(EntityType::Task),
+        "experiment" => Some(EntityType::Experiment),
+        "project" => Some(EntityType::Project),
+        _ => None,
+    }
+}
+
+fn ctl_error_from_registry(e: ProjectRegistryError) -> CtlResponse {
+    CtlResponse::Error {
+        message: e.to_string(),
     }
 }
 

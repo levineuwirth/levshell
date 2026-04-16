@@ -7,6 +7,7 @@ members = [
     "crates/levshell-context",
     "crates/levshell-sync",
     "crates/levshell-config",
+    "crates/levshell-projects",
     "crates/levshell-modules",
     "crates/levshell-daemon",
     "crates/levshell-ctl",
@@ -62,6 +63,7 @@ levshell-ipc     = { path = "crates/levshell-ipc",     version = "0.1.0" }
 levshell-context = { path = "crates/levshell-context", version = "0.1.0" }
 levshell-sync    = { path = "crates/levshell-sync",    version = "0.1.0" }
 levshell-config  = { path = "crates/levshell-config",  version = "0.1.0" }
+levshell-projects = { path = "crates/levshell-projects", version = "0.1.0" }
 levshell-modules = { path = "crates/levshell-modules", version = "0.1.0" }
 
 [profile.release]

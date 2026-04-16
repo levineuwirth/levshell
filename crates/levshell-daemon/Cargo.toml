@@ -23,6 +23,7 @@ levshell-ipc.workspace = true
 levshell-context.workspace = true
 levshell-sync.workspace = true
 levshell-config.workspace = true
+levshell-projects.workspace = true
 levshell-modules.workspace = true
 
 tokio = { workspace = true, features = ["full"] }
@@ -30,6 +31,7 @@ anyhow.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
