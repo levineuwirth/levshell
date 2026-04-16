@@ -13,6 +13,7 @@
 pub mod context_engine;
 pub mod ideation;
 pub mod palette;
+pub mod remote;
 pub mod sway;
 pub mod telemetry;
 
@@ -20,6 +21,13 @@ pub use context_engine::{default_context_engine, default_widgets, ContextEngineM
 pub use ideation::{
     IdeationConfig, IdeationConfigError, IdeationModule, Nudge, NudgeContext, NudgeKind,
     NudgeSelector, NudgeWeights, RecentEntity,
+};
+pub use remote::{
+    CommandOutput, GpuDashboardModule, GpuFleetState, GpuHostState, GpuSample, HostConfig,
+    HostFile, HostRegistry, HostRegistryError, HostRole, JobsHostState, MockRunner, RemoteError,
+    RemoteJobsModule, RemoteJobsState, RemoteRunner, SlurmJob, SshFleetState, SshHostState,
+    SshMonitorModule, SshRunner, GPU_WIDGET_ID, GPU_WIDGET_TYPE, JOBS_WIDGET_ID, JOBS_WIDGET_TYPE,
+    SSH_WIDGET_ID, SSH_WIDGET_TYPE,
 };
 pub use palette::{
     AppLauncherProvider, NoteSearchProvider, PaletteItem, PaletteModule, PaletteProvider,

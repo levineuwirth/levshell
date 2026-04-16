@@ -11,8 +11,9 @@ use anyhow::Result;
 use levshell_config::{load_profiles_from_dir, spawn_profile_watcher};
 use levshell_daemon::{init_tracing, run_with_sync, DaemonConfig, ModuleFactory, SyncAdapterFactory};
 use levshell_modules::{
-    default_context_engine, AppLauncherProvider, BatteryModule, CpuModule, IdeationModule,
-    MemoryModule, NetworkModule, NoteSearchProvider, PaletteModule, PaletteProvider,
+    default_context_engine, AppLauncherProvider, BatteryModule, CpuModule, GpuDashboardModule,
+    HostRegistry, IdeationModule, MemoryModule, NetworkModule, NoteSearchProvider, PaletteModule,
+    PaletteProvider, RemoteJobsModule, RemoteRunner, SshMonitorModule, SshRunner,
     SwayWorkspaceModule, WorkspaceSwitcherProvider,
 };
 use levshell_sync::{
@@ -80,9 +81,41 @@ async fn main() -> Result<()> {
         "ideation engine config loaded"
     );
 
+    // Host registry for the SSH / GPU / remote-jobs triad. Read once
+    // at boot — a future phase will add inotify hot-reload matching
+    // profiles/projects. Missing directory is normal (no remote
+    // hosts configured).
+    let host_registry = match levshell_config::default_config_base()
+        .map(|b| b.join("hosts"))
+    {
+        Some(dir) => match HostRegistry::load_from_dir(&dir) {
+            Ok(r) => {
+                tracing::info!(
+                    dir = %dir.display(),
+                    host_count = r.hosts().len(),
+                    "host registry loaded"
+                );
+                Arc::new(r)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    dir = %dir.display(),
+                    error = %e,
+                    "failed to load host registry; remote modules dormant"
+                );
+                Arc::new(HostRegistry::default())
+            }
+        },
+        None => {
+            tracing::debug!("no config base; remote modules dormant");
+            Arc::new(HostRegistry::default())
+        }
+    };
+
     let factory: ModuleFactory = {
         let shared_profiles = shared_profiles.clone();
         let ideation_config = ideation_config.clone();
+        let host_registry = host_registry.clone();
         Box::new(move |bus, publisher, store, projects| {
             let context_engine = default_context_engine(publisher.clone())
                 .with_shared_profiles(shared_profiles);
@@ -100,6 +133,25 @@ async fn main() -> Result<()> {
                 projects,
                 ideation_config,
             );
+
+            // Single shared SshRunner across the three remote modules
+            // so ControlMaster TCP connections are reused for every
+            // probe regardless of which module issued it.
+            let ssh_runner: Arc<dyn RemoteRunner> = Arc::new(SshRunner::new());
+            let ssh_monitor = SshMonitorModule::new(
+                host_registry.clone(),
+                ssh_runner.clone(),
+                publisher.clone(),
+                bus.clone(),
+            );
+            let gpu_dashboard = GpuDashboardModule::new(
+                host_registry.clone(),
+                ssh_runner.clone(),
+                publisher.clone(),
+            );
+            let remote_jobs =
+                RemoteJobsModule::new(host_registry.clone(), ssh_runner, publisher.clone());
+
             vec![
                 Box::new(SwayWorkspaceModule::new(bus.clone(), publisher.clone()))
                     as Box<dyn levshell_core::Module>,
@@ -111,6 +163,9 @@ async fn main() -> Result<()> {
                 Box::new(NetworkModule::new(publisher)) as Box<dyn levshell_core::Module>,
                 Box::new(palette) as Box<dyn levshell_core::Module>,
                 Box::new(ideation) as Box<dyn levshell_core::Module>,
+                Box::new(ssh_monitor) as Box<dyn levshell_core::Module>,
+                Box::new(gpu_dashboard) as Box<dyn levshell_core::Module>,
+                Box::new(remote_jobs) as Box<dyn levshell_core::Module>,
             ]
         })
     };

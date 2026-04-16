@@ -127,6 +127,23 @@ pub enum Event {
         kind: String,
         title: String,
     },
+
+    /// The SSH Connection Dashboard's latency probe for `host`
+    /// observed a reachability transition. Spec §3.4 originally
+    /// called for paired `SSHConnectionEstablished` /
+    /// `SSHConnectionDropped` events; we collapse them into a single
+    /// state-transition event because the dashboard keeps a stable
+    /// row per host and only cares about the current state.
+    ///
+    /// `reachable == false` means the last probe timed out or
+    /// returned a non-zero exit (commonly SSH auth failure). A
+    /// transient network blip still publishes exactly one event — the
+    /// module suppresses redundant same-state publishes itself.
+    SshHostStatus {
+        host: String,
+        reachable: bool,
+        latency_ms: Option<u32>,
+    },
 }
 
 /// A discriminant for filtering subscriptions without instantiating an [`Event`].
@@ -146,6 +163,7 @@ pub enum EventKind {
     SyncConflict,
     SyncError,
     NudgeDelivered,
+    SshHostStatus,
 }
 
 impl Event {
@@ -164,6 +182,7 @@ impl Event {
             Event::SyncConflict { .. } => EventKind::SyncConflict,
             Event::SyncError { .. } => EventKind::SyncError,
             Event::NudgeDelivered { .. } => EventKind::NudgeDelivered,
+            Event::SshHostStatus { .. } => EventKind::SshHostStatus,
         }
     }
 }
