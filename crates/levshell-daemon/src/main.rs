@@ -12,9 +12,9 @@ use levshell_config::{load_profiles_from_dir, spawn_profile_watcher};
 use levshell_daemon::{init_tracing, run_with_sync, DaemonConfig, ModuleFactory, SyncAdapterFactory};
 use levshell_modules::{
     default_context_engine, AppLauncherProvider, BatteryModule, CpuModule, GpuDashboardModule,
-    HostRegistry, IdeationModule, MemoryModule, NetworkModule, NoteSearchProvider, PaletteModule,
-    PaletteProvider, RemoteJobsModule, RemoteRunner, SshMonitorModule, SshRunner,
-    SwayWorkspaceModule, WorkspaceSwitcherProvider,
+    HostRegistry, IdeationModule, InterruptionCostModule, MemoryModule, NetworkModule,
+    NoteSearchProvider, PaletteModule, PaletteProvider, RemoteJobsModule, RemoteRunner,
+    SshMonitorModule, SshRunner, SwayWorkspaceModule, WorkspaceSwitcherProvider,
 };
 use levshell_sync::{
     AnkiConnectAdapter, AnkiConnectConfig, AnkiConnectConfigWatcher, CalDavAdapter, CalDavConfig,
@@ -155,6 +155,8 @@ async fn main() -> Result<()> {
 
             vec![
                 Box::new(SwayWorkspaceModule::new(bus.clone(), publisher.clone()))
+                    as Box<dyn levshell_core::Module>,
+                Box::new(InterruptionCostModule::new(publisher.clone()))
                     as Box<dyn levshell_core::Module>,
                 Box::new(context_engine) as Box<dyn levshell_core::Module>,
                 Box::new(CpuModule::new(publisher.clone())) as Box<dyn levshell_core::Module>,

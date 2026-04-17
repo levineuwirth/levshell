@@ -121,6 +121,7 @@ Scope {
     // the widget_id that the daemon publishes in BarLayout.
     property var widgetRegistry: ({
         "workspace-indicator": workspaceIndicatorComponent,
+        "interruption-cost": interruptionCostComponent,
         "clock": clockComponent,
         "cpu": cpuComponent,
         "memory": memoryComponent,
@@ -130,6 +131,7 @@ Scope {
     })
 
     Component { id: workspaceIndicatorComponent; WorkspaceIndicator {} }
+    Component { id: interruptionCostComponent; InterruptionCostWidget {} }
     Component { id: clockComponent; ClockWidget {} }
     Component { id: cpuComponent; CpuWidget {} }
     Component { id: memoryComponent; MemoryWidget {} }

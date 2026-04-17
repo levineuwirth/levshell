@@ -12,6 +12,7 @@
 
 pub mod context_engine;
 pub mod ideation;
+pub mod interruption;
 pub mod palette;
 pub mod remote;
 pub mod sway;
@@ -22,6 +23,10 @@ pub use context_engine::{default_context_engine, default_widgets, ContextEngineM
 pub use ideation::{
     IdeationConfig, IdeationConfigError, IdeationModule, Nudge, NudgeContext, NudgeKind,
     NudgeSelector, NudgeWeights, RecentEntity,
+};
+pub use interruption::{
+    InterruptionCostModule, InterruptionState, InterruptionTracker, MIN_AWAY_SECS as INTERRUPTION_MIN_AWAY_SECS,
+    WIDGET_ID as INTERRUPTION_WIDGET_ID, WIDGET_TYPE as INTERRUPTION_WIDGET_TYPE,
 };
 pub use remote::{
     CommandOutput, GpuDashboardModule, GpuFleetState, GpuHostState, GpuSample, HostConfig,

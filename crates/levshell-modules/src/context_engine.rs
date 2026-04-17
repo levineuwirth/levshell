@@ -447,6 +447,14 @@ pub fn default_widgets() -> Vec<WidgetDef> {
             .with_default(Prominence::Visible)
             .with_priority(100)
             .with_zone(Zone::Left),
+        // spec §2.12.3 — transient pill next to the workspace indicator.
+        // Always nominally Visible; the widget's own state decides whether
+        // to render anything (width 0 when dormant, fades in on re-entry
+        // above the interruption-cost threshold).
+        WidgetDef::new("interruption-cost", "interruption_cost")
+            .with_default(Prominence::Visible)
+            .with_priority(95)
+            .with_zone(Zone::Left),
         WidgetDef::new("clock", "clock")
             .with_default(Prominence::Visible)
             .with_priority(90)

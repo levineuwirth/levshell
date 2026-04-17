@@ -1,4 +1,5 @@
 WorkspaceIndicator 1.0 WorkspaceIndicator.qml
+InterruptionCostWidget 1.0 InterruptionCostWidget.qml
 ClockWidget 1.0 ClockWidget.qml
 CpuWidget 1.0 CpuWidget.qml
 MemoryWidget 1.0 MemoryWidget.qml
