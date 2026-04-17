@@ -12,10 +12,10 @@ use levshell_config::{load_profiles_from_dir, spawn_profile_watcher};
 use levshell_daemon::{init_tracing, run_with_sync, DaemonConfig, ModuleFactory, SyncAdapterFactory};
 use levshell_modules::{
     default_context_engine, default_warmup_state_path, AppLauncherProvider, BatteryModule,
-    CpuModule, GpuDashboardModule, HostRegistry, IdeationModule, InterruptionCostModule,
-    MemoryModule, NetworkModule, NoteSearchProvider, PaletteModule, PaletteProvider,
-    RemoteJobsModule, RemoteRunner, SshMonitorModule, SshRunner, SwayWorkspaceModule,
-    WarmupModule, WorkspaceSwitcherProvider,
+    CpuModule, FocusModeModule, GpuDashboardModule, HostRegistry, IdeationModule,
+    InterruptionCostModule, MemoryModule, NetworkModule, NoteSearchProvider, PaletteModule,
+    PaletteProvider, RemoteJobsModule, RemoteRunner, SshMonitorModule, SshRunner,
+    SwayWorkspaceModule, WarmupModule, WorkspaceSwitcherProvider,
 };
 use levshell_sync::{
     AnkiConnectAdapter, AnkiConnectConfig, AnkiConnectConfigWatcher, CalDavAdapter, CalDavConfig,
@@ -135,7 +135,8 @@ async fn main() -> Result<()> {
         let warmup_state_path = warmup_state_path.clone();
         Box::new(move |bus, publisher, store, projects| {
             let context_engine = default_context_engine(publisher.clone())
-                .with_shared_profiles(shared_profiles);
+                .with_shared_profiles(shared_profiles.clone());
+            let focus_mode = FocusModeModule::new(bus.clone(), shared_profiles);
             let palette_providers: Vec<Box<dyn PaletteProvider>> = vec![
                 Box::new(AppLauncherProvider::new()),
                 Box::new(WorkspaceSwitcherProvider::new()),
@@ -182,6 +183,7 @@ async fn main() -> Result<()> {
                 Box::new(InterruptionCostModule::new(publisher.clone()))
                     as Box<dyn levshell_core::Module>,
                 Box::new(context_engine) as Box<dyn levshell_core::Module>,
+                Box::new(focus_mode) as Box<dyn levshell_core::Module>,
                 Box::new(CpuModule::new(publisher.clone())) as Box<dyn levshell_core::Module>,
                 Box::new(MemoryModule::new(publisher.clone())) as Box<dyn levshell_core::Module>,
                 Box::new(BatteryModule::new(bus.clone(), publisher.clone()))

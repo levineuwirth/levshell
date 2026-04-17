@@ -20,11 +20,12 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde::Deserialize;
 use thiserror::Error;
 
-use levshell_context::{Profile, Prominence};
+use levshell_context::{parse_expression, AutoTrigger, Profile, Prominence};
 
 /// Errors the loader can emit. Parse errors for a single file are returned
 /// here but [`load_profiles_from_dir`] logs and skips them rather than
@@ -43,6 +44,13 @@ pub enum ConfigError {
         path: PathBuf,
         #[source]
         source: toml::de::Error,
+    },
+
+    #[error("invalid auto_trigger expression in profile file {path}: {source}")]
+    Trigger {
+        path: PathBuf,
+        #[source]
+        source: levshell_context::ContextError,
     },
 }
 
@@ -63,17 +71,71 @@ pub struct ProfileFile {
     /// `hidden`, `badge`, `icon_only`, `compact`, `visible`, `expanded`.
     #[serde(default)]
     pub overrides: HashMap<String, Prominence>,
+
+    /// Optional auto-activation trigger. See [`AutoTriggerFile`].
+    #[serde(default)]
+    pub auto_trigger: Option<AutoTriggerFile>,
+}
+
+/// TOML shape for an auto-activation trigger. The `when` field is a
+/// predicate in the context-engine expression DSL (same grammar used by
+/// relevance rules). It is parsed once at load time; parse failures surface
+/// as [`ConfigError::Trigger`].
+///
+/// Examples:
+///
+/// ```toml
+/// [auto_trigger]
+/// when = 'focused.app_id == "org.zotero.Zotero" or focused.title contains "arxiv"'
+/// dwell_secs = 30
+/// exit_dwell_secs = 60
+/// ```
+#[derive(Debug, Clone, Deserialize)]
+pub struct AutoTriggerFile {
+    pub when: String,
+    /// Sustained-true seconds before activating. Defaults to 30s — long
+    /// enough that alt-tab flicker doesn't trigger the profile, short
+    /// enough that a deliberate switch feels responsive.
+    #[serde(default = "default_dwell_secs")]
+    pub dwell_secs: u64,
+    /// Sustained-false seconds before deactivating. Defaults to 60s —
+    /// roughly twice `dwell_secs` so brief context breaks (checking a
+    /// slack ping, glancing at mail) don't kick the user out.
+    #[serde(default = "default_exit_dwell_secs")]
+    pub exit_dwell_secs: u64,
+}
+
+fn default_dwell_secs() -> u64 {
+    30
+}
+
+fn default_exit_dwell_secs() -> u64 {
+    60
 }
 
 impl ProfileFile {
     /// Produce a [`Profile`] from this file, using `fallback_name` when
-    /// `self.name` is `None`.
-    pub fn into_profile(self, fallback_name: &str) -> Profile {
-        Profile {
+    /// `self.name` is `None`. Parses any `[auto_trigger]` DSL string;
+    /// returns [`ConfigError::Trigger`] on parse failure with the given
+    /// path attached for diagnostics.
+    pub fn into_profile(self, fallback_name: &str, path: &Path) -> Result<Profile, ConfigError> {
+        let auto_trigger = match self.auto_trigger {
+            None => None,
+            Some(t) => Some(AutoTrigger {
+                when: parse_expression(&t.when).map_err(|e| ConfigError::Trigger {
+                    path: path.to_path_buf(),
+                    source: e,
+                })?,
+                dwell: Duration::from_secs(t.dwell_secs),
+                exit_dwell: Duration::from_secs(t.exit_dwell_secs),
+            }),
+        };
+        Ok(Profile {
             name: self.name.unwrap_or_else(|| fallback_name.to_owned()),
             overrides: self.overrides,
             suppress_notifications: self.suppress_notifications,
-        }
+            auto_trigger,
+        })
     }
 }
 
@@ -91,7 +153,7 @@ pub fn load_profile_file(path: &Path) -> Result<Profile, ConfigError> {
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("unnamed");
-    Ok(file.into_profile(fallback))
+    file.into_profile(fallback, path)
 }
 
 /// Scan a directory for `*.toml` files and load each as a profile.
@@ -355,6 +417,101 @@ clock = "visible"
         let dir = tempfile::tempdir().unwrap();
         let missing = dir.path().join("does-not-exist");
         assert!(load_profiles_from_dir(&missing).is_empty());
+    }
+
+    #[test]
+    fn parses_auto_trigger_with_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "lit-review.toml",
+            r#"
+[auto_trigger]
+when = 'focused.app_id == "org.zotero.Zotero"'
+"#,
+        );
+        let profile = load_profile_file(&dir.path().join("lit-review.toml")).unwrap();
+        let t = profile.auto_trigger.as_ref().expect("auto_trigger set");
+        assert_eq!(t.dwell, Duration::from_secs(30));
+        assert_eq!(t.exit_dwell, Duration::from_secs(60));
+    }
+
+    #[test]
+    fn parses_auto_trigger_with_custom_dwell_times() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "writing.toml",
+            r#"
+[auto_trigger]
+when = 'focused.title contains ".tex"'
+dwell_secs = 10
+exit_dwell_secs = 120
+"#,
+        );
+        let profile = load_profile_file(&dir.path().join("writing.toml")).unwrap();
+        let t = profile.auto_trigger.as_ref().expect("auto_trigger set");
+        assert_eq!(t.dwell, Duration::from_secs(10));
+        assert_eq!(t.exit_dwell, Duration::from_secs(120));
+    }
+
+    #[test]
+    fn invalid_trigger_expression_surfaces_trigger_error() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "broken.toml",
+            r#"
+[auto_trigger]
+when = 'focused.app_id =='
+"#,
+        );
+        let result = load_profile_file(&dir.path().join("broken.toml"));
+        assert!(matches!(result, Err(ConfigError::Trigger { .. })));
+    }
+
+    #[test]
+    fn shipped_lit_review_example_parses() {
+        // Confidence check: the repo's config/profiles/lit-review.toml
+        // stays valid as the DSL evolves. The include_str! path is
+        // relative to *this* source file.
+        let body = include_str!("../../../config/profiles/lit-review.toml");
+        let parsed: ProfileFile = toml::from_str(body).expect("valid toml");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lit-review.toml");
+        std::fs::write(&path, body).unwrap();
+        let profile = parsed.into_profile("lit-review", &path).unwrap();
+        assert_eq!(profile.name, "lit-review");
+        assert!(profile.auto_trigger.is_some());
+        assert!(profile.suppress_notifications);
+    }
+
+    #[test]
+    fn shipped_writing_example_parses() {
+        let body = include_str!("../../../config/profiles/writing.toml");
+        let parsed: ProfileFile = toml::from_str(body).expect("valid toml");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("writing.toml");
+        std::fs::write(&path, body).unwrap();
+        let profile = parsed.into_profile("writing", &path).unwrap();
+        assert_eq!(profile.name, "writing");
+        assert!(profile.auto_trigger.is_some());
+        assert!(profile.suppress_notifications);
+    }
+
+    #[test]
+    fn profile_without_trigger_has_none() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "manual.toml",
+            r#"
+[overrides]
+cpu = "badge"
+"#,
+        );
+        let profile = load_profile_file(&dir.path().join("manual.toml")).unwrap();
+        assert!(profile.auto_trigger.is_none());
     }
 
     #[test]

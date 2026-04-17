@@ -346,6 +346,21 @@ impl ContextEngineModule {
                     }
                 }
             }
+            "deactivate" => {
+                // If `name` is supplied, only clear when it matches the
+                // currently-active profile — this is how the focus-mode
+                // driver safely retracts an auto-activation without
+                // clobbering a manual one the user layered on top. If
+                // `name` is None, clear unconditionally (manual "exit").
+                match name {
+                    Some(target) => {
+                        if self.active_profile.as_deref() == Some(target) {
+                            self.active_profile = None;
+                        }
+                    }
+                    None => self.active_profile = None,
+                }
+            }
             "cycle" => {
                 let names: Vec<String> = {
                     let guard = self
@@ -664,6 +679,65 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(module.active_profile.as_deref(), Some("writing"));
+    }
+
+    #[tokio::test]
+    async fn deactivate_matching_clears_active_profile() {
+        let (publisher, _handle, _reader) = writer_over_duplex();
+        let mut module = ContextEngineModule::new(publisher)
+            .with_widgets(three_widgets())
+            .with_profiles(vec![
+                Profile::new("writing"),
+                Profile::new("lit-review"),
+            ]);
+        module.start().await.unwrap();
+
+        module
+            .on_event(&Event::ProfileActionRequested {
+                action: "activate".into(),
+                name: Some("lit-review".into()),
+            })
+            .await
+            .unwrap();
+        assert_eq!(module.active_profile.as_deref(), Some("lit-review"));
+
+        // Deactivate with a non-matching name — no-op.
+        module
+            .on_event(&Event::ProfileActionRequested {
+                action: "deactivate".into(),
+                name: Some("writing".into()),
+            })
+            .await
+            .unwrap();
+        assert_eq!(module.active_profile.as_deref(), Some("lit-review"));
+
+        // Deactivate with matching name — clears.
+        module
+            .on_event(&Event::ProfileActionRequested {
+                action: "deactivate".into(),
+                name: Some("lit-review".into()),
+            })
+            .await
+            .unwrap();
+        assert!(module.active_profile.is_none());
+    }
+
+    #[tokio::test]
+    async fn deactivate_without_name_clears_any_active_profile() {
+        let (publisher, _handle, _reader) = writer_over_duplex();
+        let mut module = ContextEngineModule::new(publisher)
+            .with_widgets(three_widgets())
+            .with_profiles(vec![Profile::new("writing")])
+            .with_active_profile("writing");
+        module.start().await.unwrap();
+        module
+            .on_event(&Event::ProfileActionRequested {
+                action: "deactivate".into(),
+                name: None,
+            })
+            .await
+            .unwrap();
+        assert!(module.active_profile.is_none());
     }
 
     #[tokio::test]

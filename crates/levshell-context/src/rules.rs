@@ -148,6 +148,33 @@ pub struct Profile {
     /// Optional: suppress notifications while this profile is active.
     /// Echoed in the output layout but not consumed by the cascade itself.
     pub suppress_notifications: bool,
+    /// Optional auto-activation trigger. When present, a focus-mode driver
+    /// (see `levshell-modules::focus`) watches signals and requests profile
+    /// activation when the predicate has been continuously true for
+    /// `dwell`, deactivation when it has been continuously false for
+    /// `exit_dwell`. Absent → profile is manual-only (ctl / keybind).
+    pub auto_trigger: Option<AutoTrigger>,
+}
+
+/// Auto-activation rule for a context profile (spec §2.12.4 literature
+/// review mode, §2.12.5 writing mode). Deliberately signal-agnostic: the
+/// predicate is any [`Expression`] over the runtime [`SignalContext`], so
+/// the profile can react to `focused.app_id`, window titles, workspace
+/// names, tags, battery state, or anything else the engine can name.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AutoTrigger {
+    /// Predicate evaluated on every tick + signal change. `true` means the
+    /// conditions for this profile to be active are met *right now*.
+    pub when: Expression,
+    /// Sustained-true duration required before publishing an activate
+    /// request. Prevents profile flicker when the user briefly alt-tabs
+    /// through a matching window.
+    pub dwell: Duration,
+    /// Sustained-false duration required before publishing a deactivate
+    /// request. Typically longer than `dwell` so quick sidebars (reply to
+    /// a slack ping, check mail) don't drop the user out of lit-review /
+    /// writing mode immediately.
+    pub exit_dwell: Duration,
 }
 
 impl Profile {
@@ -156,11 +183,17 @@ impl Profile {
             name: name.into(),
             overrides: HashMap::new(),
             suppress_notifications: false,
+            auto_trigger: None,
         }
     }
 
     pub fn with(mut self, widget_id: impl Into<String>, prominence: Prominence) -> Self {
         self.overrides.insert(widget_id.into(), prominence);
+        self
+    }
+
+    pub fn with_auto_trigger(mut self, trigger: AutoTrigger) -> Self {
+        self.auto_trigger = Some(trigger);
         self
     }
 }

@@ -1,0 +1,34 @@
+# Writing mode — spec §2.12.5.
+#
+# Auto-activates when a text editor or markup file is focused. Same
+# extensibility notes as lit-review.toml — add your editor or file
+# extension to the `when` predicate.
+
+name = "writing"
+suppress_notifications = true
+
+[auto_trigger]
+when = '''
+  focused.app_id == "neovide"
+  or focused.app_id == "org.gnome.TextEditor"
+  or focused.app_id == "org.gnome.gedit"
+  or focused.app_id == "obsidian"
+  or focused.app_id == "com.vscodium.codium"
+  or focused.app_id == "code"
+  or focused.title contains ".md"
+  or focused.title contains ".tex"
+  or focused.title contains ".typ"
+  or focused.title contains ".rst"
+'''
+dwell_secs = 30
+exit_dwell_secs = 60
+
+[overrides]
+# Writing: noise suppressed, clock prominent so time-boxed writing
+# sessions have a visible reference, interruption pill hidden.
+notifications = "hidden"
+clock = "visible"
+cpu = "badge"
+memory = "badge"
+network = "badge"
+interruption-cost = "hidden"

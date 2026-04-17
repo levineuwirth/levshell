@@ -32,9 +32,9 @@ pub mod signals;
 
 pub use cascade::{resolve_layout, CascadeInput, Layout, WidgetWidthFn};
 pub use error::{ContextError, Result};
-pub use expr::{parse_expression, Expression};
+pub use expr::{evaluate, parse_expression, Expression};
 pub use hysteresis::{Hysteresis, HysteresisConfig, Transition};
-pub use rules::{CompiledRule, Profile, WidgetDef};
+pub use rules::{AutoTrigger, CompiledRule, Profile, WidgetDef};
 pub use signals::{SignalContext, SignalValue};
 
 // Re-export the canonical Prominence type from the IPC crate so downstream

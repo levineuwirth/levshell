@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 
 pub mod context_engine;
+pub mod focus;
 pub mod ideation;
 pub mod interruption;
 pub mod palette;
@@ -21,6 +22,7 @@ pub mod telemetry;
 pub mod theme;
 
 pub use context_engine::{default_context_engine, default_widgets, ContextEngineModule};
+pub use focus::{FocusModeModule, FocusModeTracker, TriggerAction, TriggerInput, TriggerPhase};
 pub use ideation::{
     IdeationConfig, IdeationConfigError, IdeationModule, Nudge, NudgeContext, NudgeKind,
     NudgeSelector, NudgeWeights, RecentEntity,

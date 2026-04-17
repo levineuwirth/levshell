@@ -1,0 +1,42 @@
+# Literature review mode — spec §2.12.4.
+#
+# A context profile for deep reading. Auto-activates when a PDF reader or
+# reference manager has been focused for 30s, or when the active window
+# title looks paper-ish (arXiv, .pdf). Deactivates after 60s of sustained
+# non-match so quick context breaks don't kick you out.
+#
+# The `when` predicate is the full context-engine expression DSL, so this
+# list is extensible to any signal the engine knows about:
+#   focused.app_id    — Wayland app_id of the focused window
+#   focused.title     — window title
+#   workspace.name    — active Sway workspace
+#   workspace.tags    — user-assigned tags (if any)
+#   battery.percent, power.on_battery, bar.density, …
+#
+# Zotero is just one branch. Add your favourite reader / remove what you
+# don't use.
+
+name = "lit-review"
+suppress_notifications = true
+
+[auto_trigger]
+when = '''
+  focused.app_id == "org.zotero.Zotero"
+  or focused.app_id == "Zotero"
+  or focused.app_id == "org.pwmt.zathura"
+  or focused.app_id == "org.gnome.Evince"
+  or focused.app_id == "org.kde.okular"
+  or focused.app_id == "sioyek"
+  or focused.title contains "arXiv"
+  or focused.title contains ".pdf"
+'''
+dwell_secs = 30
+exit_dwell_secs = 60
+
+[overrides]
+# Deep reading: drop all noise, keep only the essentials.
+notifications = "hidden"
+cpu = "badge"
+memory = "badge"
+network = "badge"
+interruption-cost = "hidden"
