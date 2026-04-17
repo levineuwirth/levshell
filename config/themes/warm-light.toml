@@ -1,0 +1,57 @@
+# Levshell built-in theme — warm light.
+#
+# Spec §3.6 "Dark and Light Mode" describes light mode as
+# hand-authored (not algorithmically derived from dark). This
+# palette inverts the luminance hierarchy of warm-dark while
+# preserving the blue-purple accent hues, with manual saturation
+# and lightness tweaks to keep the contrast ratios within the
+# §3.2.2 wallpaper-worst-case guidelines.
+#
+# `dark_pair` lets `levshell-ctl theme toggle-mode` swap back to
+# warm-dark in one command.
+
+[meta]
+name = "Warm Light"
+author = "Levshell"
+variant = "light"
+dark_pair = "warm-dark"
+
+[colors]
+# 4-tier surface hierarchy — inverted luminance, slight warm tint.
+bg             = "#F5F4EF"
+bg_dark        = "#ECEBE4"
+surface        = "#E8E6DE"
+surface_raised = "#DEDBD1"
+overlay        = "#CFCBBF"
+
+fg          = "#2A2530"
+fg_muted    = "#6E6978"
+fg_subtle   = "#918C9C"
+on_primary  = "#F5F4EF"
+on_surface  = "#2A2530"
+outline     = "#CFCBBF"
+
+# Accent hues preserved from warm-dark; darkened a touch to stay
+# legible on the lighter surface.
+primary           = "#4C6FBC"
+primary_variant   = "#3A57A0"
+secondary         = "#8B6CC5"
+secondary_variant = "#6E52A8"
+tertiary          = "#4A9DCB"
+
+success = "#5F8C3A"
+warning = "#B3832C"
+error   = "#C44E65"
+info    = "#1E8BA3"
+
+[health]
+stale_pill = "#918C9C"
+error_pill = "#9A6650"
+
+[bar]
+opacity             = 0.85
+blur_radius         = 30
+opacity_battery     = 1.0
+blur_radius_battery = 0
+height_full         = 44
+height_compact      = 32

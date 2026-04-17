@@ -33,13 +33,29 @@ import QtQuick
 
 QtObject {
     // =================================================================
-    // SURFACES — §3.2, 4-tier hierarchy
+    // THEME VARIANT — "dark" or "light"
+    //
+    // Set by `dispatchTheme()` in main.qml from the ThemePayload's
+    // variant field. Widgets can key light-specific treatments off
+    // this (e.g. inverted health pill outlines).
     // =================================================================
-    readonly property color bg:            "#1A1B26"
-    readonly property color bgDark:        "#16161E"
-    readonly property color surface:       "#24283B"
-    readonly property color surfaceRaised: "#2F3549"
-    readonly property color overlay:       "#3B4261"
+    property string mode: "dark"
+    /// Active theme's display name ("Warm Dark", "Neutral Dark", ...).
+    property string themeName: "Warm Dark"
+
+    // =================================================================
+    // SURFACES — §3.2, 4-tier hierarchy
+    //
+    // These (and everything from here through state colors) are
+    // `property` (not `readonly`) so the daemon's TOML theme loader
+    // can override them via DaemonMessage.Theme. Unspecified tokens
+    // fall back to the warm-dark default values in these initializers.
+    // =================================================================
+    property color bg:            "#1A1B26"
+    property color bgDark:        "#16161E"
+    property color surface:       "#24283B"
+    property color surfaceRaised: "#2F3549"
+    property color overlay:       "#3B4261"
 
     // =================================================================
     // CONTENT COLORS — §3.3
@@ -48,29 +64,29 @@ QtObject {
     // property names starting with `on*` are parsed as signal handlers,
     // so we prefix with `textOn` to keep them as colors.
     // =================================================================
-    readonly property color fg:            "#C0CAF5"  // primary text & icons
-    readonly property color fgMuted:       "#565F89"  // disabled, timestamps
-    readonly property color fgSubtle:      "#737AA2"  // secondary labels, hints
-    readonly property color textOnPrimary: "#1A1B26"  // text on primary bg
-    readonly property color textOnSurface: "#C0CAF5"  // alias of fg
-    readonly property color outline:       "#3B4261"  // borders, dividers
+    property color fg:            "#C0CAF5"  // primary text & icons
+    property color fgMuted:       "#565F89"  // disabled, timestamps
+    property color fgSubtle:      "#737AA2"  // secondary labels, hints
+    property color textOnPrimary: "#1A1B26"  // text on primary bg
+    property color textOnSurface: "#C0CAF5"  // alias of fg
+    property color outline:       "#3B4261"  // borders, dividers
 
     // =================================================================
     // ACCENT COLORS — §3.4, single primary
     // =================================================================
-    readonly property color primary:          "#7AA2F7"
-    readonly property color primaryVariant:   "#5A7FD4"
-    readonly property color secondary:        "#BB9AF7"
-    readonly property color secondaryVariant: "#9D7CD8"
-    readonly property color tertiary:         "#7DCFFF"
+    property color primary:          "#7AA2F7"
+    property color primaryVariant:   "#5A7FD4"
+    property color secondary:        "#BB9AF7"
+    property color secondaryVariant: "#9D7CD8"
+    property color tertiary:         "#7DCFFF"
 
     // =================================================================
     // STATE COLORS — §3.5, full saturation for escalation
     // =================================================================
-    readonly property color success: "#9ECE6A"
-    readonly property color warning: "#E0AF68"
-    readonly property color error:   "#F7768E"
-    readonly property color info:    "#2AC3DE"
+    property color success: "#9ECE6A"
+    property color warning: "#E0AF68"
+    property color error:   "#F7768E"
+    property color info:    "#2AC3DE"
 
     // =================================================================
     // HEALTH STATE PILLS — §7.3, muted/desaturated
@@ -78,20 +94,20 @@ QtObject {
     // Health state communicates data freshness (a lower-urgency concern);
     // the full-sat tokens are reserved for the urgency/escalation system.
     // =================================================================
-    readonly property color stalePill: "#737AA2"  // derived from fgSubtle
-    readonly property color errorPill: "#B8806A"  // muted terracotta
+    property color stalePill: "#737AA2"  // derived from fgSubtle
+    property color errorPill: "#B8806A"  // muted terracotta
 
     // =================================================================
     // TYPOGRAPHY — §4
+    //
+    // `fontText` and `fontMono` are overridable via the TOML theme's
+    // [typography] section. `fontIcon` normally stays fixed (Phosphor
+    // is bundled at `shell/fonts/Phosphor.ttf`) but can be overridden
+    // for themes that ship a different icon set.
     // =================================================================
-    readonly property string fontText: "Spectral"
-    readonly property string fontMono: "IBM Plex Mono"
-    // Phosphor Icons — bundled at `shell/fonts/Phosphor.ttf` and
-    // loaded via FontLoader in main.qml. The family name "Phosphor"
-    // resolves to the loaded TTF once the FontLoader status reaches
-    // Ready; widgets and the palette render glyphs via the
-    // `icon*` private-use-area string tokens below.
-    readonly property string fontIcon: "Phosphor"
+    property string fontText: "Spectral"
+    property string fontMono: "IBM Plex Mono"
+    property string fontIcon: "Phosphor"
 
     // Type scale (1.2× minor-third, anchored at 13px body). Each entry
     // has a matching weight token.
@@ -136,10 +152,10 @@ QtObject {
     // PowerStateChanged → DaemonMessage::PowerState; the shell sets
     // `onBattery` in its dispatchDaemonMessage handler.
     // =================================================================
-    readonly property real barOpacity:        0.80
-    readonly property real barOpacityBattery: 1.0
-    readonly property int  barBlurRadius:          30
-    readonly property int  barBlurRadiusBattery:   0
+    property real barOpacity:        0.80
+    property real barOpacityBattery: 1.0
+    property int  barBlurRadius:          30
+    property int  barBlurRadiusBattery:   0
 
     property bool onBattery: false
 
@@ -152,8 +168,8 @@ QtObject {
     // =================================================================
     property string density: "full"
 
-    readonly property int barHeightFull:    44
-    readonly property int barHeightCompact: 32
+    property int barHeightFull:    44
+    property int barHeightCompact: 32
     readonly property int barHeightHidden:  0
 
     readonly property int iconSizeFull:    20

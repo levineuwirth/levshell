@@ -111,6 +111,13 @@ pub enum CtlRequest {
         entity_type: String,
         entity_id: String,
     },
+    /// Activate, query, or enumerate themes (spec design doc §11).
+    /// `Set` requires `name`; every other action ignores it.
+    Theme {
+        action: ThemeAction,
+        #[serde(default)]
+        name: Option<String>,
+    },
 }
 
 /// The daemon's reply to a [`CtlRequest`]. Exactly one of these is written
@@ -134,6 +141,29 @@ pub enum CtlResponse {
     Error {
         message: String,
     },
+    /// Currently active theme summary. Returned for
+    /// [`ThemeAction::Query`] and [`ThemeAction::Set`].
+    ActiveTheme(ThemeSnapshot),
+    /// Available theme names (file stems). Returned for
+    /// [`ThemeAction::List`].
+    Themes {
+        names: Vec<String>,
+    },
+}
+
+/// Compact shape of the currently-active theme. The full token
+/// payload is streamed over [`crate::DaemonMessage::Theme`] on the
+/// persistent shell connection; this summary is for ctl output
+/// ("warm-dark (dark)").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThemeSnapshot {
+    pub name: String,
+    /// `"dark"` or `"light"`.
+    pub variant: String,
+    #[serde(default)]
+    pub light_pair: Option<String>,
+    #[serde(default)]
+    pub dark_pair: Option<String>,
 }
 
 /// Compact shape of a project, used by [`CtlResponse::Projects`]. The
@@ -182,4 +212,18 @@ pub enum PaletteAction {
     Close,
     Toggle,
     Query,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThemeAction {
+    /// Activate the theme named by `name`.
+    Set,
+    /// Switch between the current theme and its `light_pair` /
+    /// `dark_pair`. No-op if the current theme doesn't declare one.
+    ToggleMode,
+    /// Return the active theme snapshot without changing anything.
+    Query,
+    /// Enumerate available theme names.
+    List,
 }

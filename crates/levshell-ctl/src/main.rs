@@ -13,7 +13,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use levshell_ipc::{
     default_socket_path, BarDensity, ClientRole, CtlRequest, CtlResponse, Hello, IpcConnection,
-    JsonCodec, PaletteAction, ProfileAction,
+    JsonCodec, PaletteAction, ProfileAction, ThemeAction,
 };
 use tokio::net::UnixStream;
 
@@ -75,6 +75,31 @@ enum Command {
         entity_type: CliEntityType,
         entity_id: String,
     },
+
+    /// Activate a theme, toggle between paired light/dark variants,
+    /// query the active theme, or list available themes. Theme files
+    /// live in `~/.config/levshell/themes/<name>.toml`.
+    Theme {
+        #[command(subcommand)]
+        action: ThemeCmd,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ThemeCmd {
+    /// Activate a theme by file-stem name (e.g. `warm-dark`).
+    Set {
+        /// Theme name — the `<name>.toml` stem in the themes dir.
+        name: String,
+    },
+    /// Switch between the current theme and its paired variant.
+    /// No-op if the current theme doesn't declare `light_pair` /
+    /// `dark_pair`.
+    ToggleMode,
+    /// Print the active theme's name + variant.
+    Query,
+    /// Enumerate available themes.
+    List,
 }
 
 #[derive(Debug, Copy, Clone, ValueEnum)]
@@ -244,6 +269,24 @@ fn build_request(cmd: Command) -> CtlRequest {
             entity_type: entity_type.as_wire().to_string(),
             entity_id,
         },
+        Command::Theme { action } => match action {
+            ThemeCmd::Set { name } => CtlRequest::Theme {
+                action: ThemeAction::Set,
+                name: Some(name),
+            },
+            ThemeCmd::ToggleMode => CtlRequest::Theme {
+                action: ThemeAction::ToggleMode,
+                name: None,
+            },
+            ThemeCmd::Query => CtlRequest::Theme {
+                action: ThemeAction::Query,
+                name: None,
+            },
+            ThemeCmd::List => CtlRequest::Theme {
+                action: ThemeAction::List,
+                name: None,
+            },
+        },
     }
 }
 
@@ -281,6 +324,24 @@ fn print_response(response: &CtlResponse) {
                     "    focus: {}s  last_active: {}  active_ws: {}",
                     p.accumulated_focus_time_secs, last, active
                 );
+            }
+        }
+        CtlResponse::ActiveTheme(t) => {
+            let pair = t
+                .light_pair
+                .as_deref()
+                .or(t.dark_pair.as_deref())
+                .map(|n| format!(" (pair: {n})"))
+                .unwrap_or_default();
+            println!("{}  variant: {}{}", t.name, t.variant, pair);
+        }
+        CtlResponse::Themes { names } => {
+            if names.is_empty() {
+                println!("(no themes installed)");
+            } else {
+                for n in names {
+                    println!("{n}");
+                }
             }
         }
         CtlResponse::Error { message } => {

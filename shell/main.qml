@@ -185,9 +185,63 @@ Scope {
             Theme.density = msg.mode || "full";
             break;
         }
+        case "theme": {
+            shell.applyTheme(msg);
+            break;
+        }
         default:
             break;
         }
+    }
+
+    // Apply a DaemonMessage::Theme payload. The payload mirrors the
+    // TOML theme file structure from spec design doc §11 — every
+    // override field is optional, and missing fields leave the
+    // existing Theme.qml property at its current value. That keeps
+    // partial community themes valid without forcing them to
+    // duplicate every hex value.
+    function applyTheme(msg) {
+        if (msg.name) Theme.themeName = msg.name;
+        if (msg.variant) Theme.mode = msg.variant;
+
+        const c = msg.colors || {};
+        if (c.bg) Theme.bg = c.bg;
+        if (c.bg_dark) Theme.bgDark = c.bg_dark;
+        if (c.surface) Theme.surface = c.surface;
+        if (c.surface_raised) Theme.surfaceRaised = c.surface_raised;
+        if (c.overlay) Theme.overlay = c.overlay;
+        if (c.fg) Theme.fg = c.fg;
+        if (c.fg_muted) Theme.fgMuted = c.fg_muted;
+        if (c.fg_subtle) Theme.fgSubtle = c.fg_subtle;
+        if (c.on_primary) Theme.textOnPrimary = c.on_primary;
+        if (c.on_surface) Theme.textOnSurface = c.on_surface;
+        if (c.outline) Theme.outline = c.outline;
+        if (c.primary) Theme.primary = c.primary;
+        if (c.primary_variant) Theme.primaryVariant = c.primary_variant;
+        if (c.secondary) Theme.secondary = c.secondary;
+        if (c.secondary_variant) Theme.secondaryVariant = c.secondary_variant;
+        if (c.tertiary) Theme.tertiary = c.tertiary;
+        if (c.success) Theme.success = c.success;
+        if (c.warning) Theme.warning = c.warning;
+        if (c.error) Theme.error = c.error;
+        if (c.info) Theme.info = c.info;
+
+        const h = msg.health || {};
+        if (h.stale_pill) Theme.stalePill = h.stale_pill;
+        if (h.error_pill) Theme.errorPill = h.error_pill;
+
+        const b = msg.bar || {};
+        if (b.opacity !== undefined && b.opacity !== null) Theme.barOpacity = b.opacity;
+        if (b.blur_radius !== undefined && b.blur_radius !== null) Theme.barBlurRadius = b.blur_radius;
+        if (b.opacity_battery !== undefined && b.opacity_battery !== null) Theme.barOpacityBattery = b.opacity_battery;
+        if (b.blur_radius_battery !== undefined && b.blur_radius_battery !== null) Theme.barBlurRadiusBattery = b.blur_radius_battery;
+        if (b.height_full !== undefined && b.height_full !== null) Theme.barHeightFull = b.height_full;
+        if (b.height_compact !== undefined && b.height_compact !== null) Theme.barHeightCompact = b.height_compact;
+
+        const t = msg.typography || {};
+        if (t.font_text) Theme.fontText = t.font_text;
+        if (t.font_mono) Theme.fontMono = t.font_mono;
+        if (t.font_icon) Theme.fontIcon = t.font_icon;
     }
 
     function prominenceFor(widgetId) {

@@ -1,0 +1,437 @@
+//! Theme service (spec design doc §11).
+//!
+//! Loads a theme TOML from `~/.config/levshell/themes/<name>.toml`,
+//! publishes a full [`DaemonMessage::Theme`] payload over IPC so the
+//! shell's Theme.qml can apply overrides, and fires
+//! [`Event::ThemeActivated`] on the bus for any module that wants
+//! to react to theme switches (future: Sway-border propagator, GTK
+//! sync).
+//!
+//! **Not a `Module`.** It's a shared service held behind an
+//! `Arc<ThemeService>` on the daemon's `SharedState`, same pattern
+//! as `ProjectRegistry`. Per-ctl-request it loads + publishes
+//! synchronously; no tick, no per-tick state.
+//!
+//! The shell's per-connection [`WidgetPublisher`] is set via
+//! [`ThemeService::attach_publisher`] after the shell connects.
+//! Before that the service still handles `query` / `list` cleanly;
+//! `set` / `toggle_mode` are buffered — the theme applies to
+//! `self.active`, and the publisher push is skipped with a warn.
+
+use std::path::PathBuf;
+use std::sync::Mutex;
+
+use levshell_config::{
+    list_themes, load_theme, BarTokens, ColorTokens, HealthTokens, IconTokens, ThemeFile,
+    TypographyTokens,
+};
+use levshell_core::{Event, EventBus};
+use levshell_ipc::{
+    DaemonMessage, ThemeBar, ThemeColors, ThemeHealth, ThemeIcons, ThemePayload, ThemeSnapshot,
+    ThemeTypography, WidgetPublisher,
+};
+
+pub const MODULE_NAME: &str = "theme";
+
+/// Theme activated at daemon start unless a later
+/// `levshell-ctl theme set` overrides. Users who want a different
+/// default add `exec_always levshell-ctl theme set <name>` to their
+/// Sway config.
+pub const DEFAULT_THEME_NAME: &str = "warm-dark";
+
+#[derive(Debug)]
+struct Inner {
+    active: Option<ThemeFile>,
+    publisher: Option<WidgetPublisher>,
+}
+
+/// Shared service. Cheap to clone via `Arc`.
+pub struct ThemeService {
+    inner: Mutex<Inner>,
+    themes_dir: Option<PathBuf>,
+    bus: EventBus,
+}
+
+impl ThemeService {
+    pub fn new(themes_dir: Option<PathBuf>, bus: EventBus) -> Self {
+        Self {
+            inner: Mutex::new(Inner {
+                active: None,
+                publisher: None,
+            }),
+            themes_dir,
+            bus,
+        }
+    }
+
+    /// Bind the shell's per-connection [`WidgetPublisher`]. Called
+    /// by the daemon after handshake completes. Immediately pushes
+    /// the currently-active theme (if any) to catch late-joining
+    /// shells up with the daemon's state.
+    pub fn attach_publisher(&self, publisher: WidgetPublisher) {
+        let payload = {
+            let mut guard = self.inner.lock().expect("theme service lock poisoned");
+            guard.publisher = Some(publisher.clone());
+            guard.active.as_ref().map(file_to_payload)
+        };
+        if let Some(payload) = payload {
+            if let Err(e) = publisher.try_send(DaemonMessage::Theme(Box::new(payload))) {
+                tracing::warn!(
+                    error = %e,
+                    "theme: failed to push active theme on shell connect"
+                );
+            }
+        }
+    }
+
+    /// Currently-active snapshot, or `None` when no theme has been
+    /// successfully loaded since daemon start.
+    pub fn snapshot(&self) -> Option<ThemeSnapshot> {
+        let guard = self.inner.lock().expect("theme service lock poisoned");
+        guard.active.as_ref().map(theme_snapshot)
+    }
+
+    /// Enumerate available theme names from the configured dir.
+    pub fn list(&self) -> Vec<String> {
+        self.themes_dir
+            .as_deref()
+            .map(list_themes)
+            .unwrap_or_default()
+    }
+
+    /// Activate `name`. Loads the TOML, publishes a full
+    /// [`DaemonMessage::Theme`] to the shell (if attached), and
+    /// emits [`Event::ThemeActivated`] on the bus. Returns the new
+    /// snapshot on success.
+    pub fn activate(&self, name: &str) -> Result<ThemeSnapshot, String> {
+        let Some(dir) = self.themes_dir.as_deref() else {
+            return Err("no themes directory configured".into());
+        };
+        let theme = load_theme(dir, name).map_err(|e| e.to_string())?;
+        let payload = file_to_payload(&theme);
+        let snapshot = theme_snapshot(&theme);
+
+        // Take a clone of the publisher under lock, then drop the
+        // lock before sending so try_send can't deadlock if the
+        // publisher callback ever tries to re-enter (it doesn't
+        // today, but defensive).
+        let publisher = {
+            let mut guard = self.inner.lock().expect("theme service lock poisoned");
+            guard.active = Some(theme);
+            guard.publisher.clone()
+        };
+        if let Some(p) = publisher {
+            if let Err(e) = p.try_send(DaemonMessage::Theme(Box::new(payload))) {
+                tracing::warn!(error = %e, "theme: failed to publish ThemePayload");
+            }
+        } else {
+            tracing::debug!(
+                theme = %snapshot.name,
+                "theme: activated without a shell connection; payload buffered"
+            );
+        }
+
+        self.bus.publish(Event::ThemeActivated {
+            name: snapshot.name.clone(),
+            variant: snapshot.variant.clone(),
+        });
+        tracing::info!(
+            theme = %snapshot.name,
+            variant = %snapshot.variant,
+            "theme: activated"
+        );
+        Ok(snapshot)
+    }
+
+    /// Switch to the current theme's paired variant. Returns an
+    /// error when there's no active theme or the current one
+    /// doesn't declare a `light_pair` / `dark_pair`.
+    pub fn toggle_mode(&self) -> Result<ThemeSnapshot, String> {
+        let pair_name = {
+            let guard = self.inner.lock().expect("theme service lock poisoned");
+            let Some(active) = guard.active.as_ref() else {
+                return Err("no active theme to toggle from".into());
+            };
+            match active.meta.variant.as_str() {
+                "dark" => active.meta.light_pair.clone(),
+                "light" => active.meta.dark_pair.clone(),
+                other => {
+                    return Err(format!("active theme has invalid variant {other:?}"));
+                }
+            }
+        };
+        let Some(pair) = pair_name else {
+            return Err(
+                "active theme does not declare a light_pair / dark_pair to toggle to".into(),
+            );
+        };
+        self.activate(&pair)
+    }
+
+    /// Activate [`DEFAULT_THEME_NAME`] if it parses, otherwise log
+    /// and leave `active` as `None`. Called from daemon boot before
+    /// any shell connects; a later `ThemeService::attach_publisher`
+    /// pushes whatever landed here to the shell.
+    pub fn load_default(&self) {
+        if self.themes_dir.is_none() {
+            tracing::debug!(
+                "theme: no themes directory; shell will use built-in Theme.qml defaults"
+            );
+            return;
+        }
+        if let Err(e) = self.activate(DEFAULT_THEME_NAME) {
+            tracing::warn!(
+                theme = DEFAULT_THEME_NAME,
+                error = %e,
+                "theme: couldn't activate default on boot; shell will use built-in Theme.qml defaults"
+            );
+        }
+    }
+}
+
+fn theme_snapshot(theme: &ThemeFile) -> ThemeSnapshot {
+    ThemeSnapshot {
+        name: theme.meta.name.clone(),
+        variant: theme.meta.variant.clone(),
+        light_pair: theme.meta.light_pair.clone(),
+        dark_pair: theme.meta.dark_pair.clone(),
+    }
+}
+
+/// Translate a parsed [`ThemeFile`] into the wire-shape
+/// [`ThemePayload`]. 1:1 pass-through — overrides stay `Option<T>`.
+pub(crate) fn file_to_payload(theme: &ThemeFile) -> ThemePayload {
+    ThemePayload {
+        name: theme.meta.name.clone(),
+        variant: theme.meta.variant.clone(),
+        light_pair: theme.meta.light_pair.clone(),
+        dark_pair: theme.meta.dark_pair.clone(),
+        colors: colors_to_wire(&theme.colors),
+        health: theme.health.as_ref().map(health_to_wire).unwrap_or_default(),
+        bar: theme.bar.as_ref().map(bar_to_wire).unwrap_or_default(),
+        typography: theme
+            .typography
+            .as_ref()
+            .map(typography_to_wire)
+            .unwrap_or_default(),
+        icons: theme.icons.as_ref().map(icons_to_wire).unwrap_or_default(),
+    }
+}
+
+fn colors_to_wire(c: &ColorTokens) -> ThemeColors {
+    ThemeColors {
+        bg: c.bg.clone(),
+        bg_dark: c.bg_dark.clone(),
+        surface: c.surface.clone(),
+        surface_raised: c.surface_raised.clone(),
+        overlay: c.overlay.clone(),
+        fg: c.fg.clone(),
+        fg_muted: c.fg_muted.clone(),
+        fg_subtle: c.fg_subtle.clone(),
+        on_primary: c.on_primary.clone(),
+        on_surface: c.on_surface.clone(),
+        outline: c.outline.clone(),
+        primary: c.primary.clone(),
+        primary_variant: c.primary_variant.clone(),
+        secondary: c.secondary.clone(),
+        secondary_variant: c.secondary_variant.clone(),
+        tertiary: c.tertiary.clone(),
+        success: c.success.clone(),
+        warning: c.warning.clone(),
+        error: c.error.clone(),
+        info: c.info.clone(),
+    }
+}
+
+fn health_to_wire(h: &HealthTokens) -> ThemeHealth {
+    ThemeHealth {
+        stale_pill: h.stale_pill.clone(),
+        error_pill: h.error_pill.clone(),
+    }
+}
+
+fn bar_to_wire(b: &BarTokens) -> ThemeBar {
+    ThemeBar {
+        opacity: b.opacity,
+        blur_radius: b.blur_radius,
+        opacity_battery: b.opacity_battery,
+        blur_radius_battery: b.blur_radius_battery,
+        height_full: b.height_full,
+        height_compact: b.height_compact,
+    }
+}
+
+fn typography_to_wire(t: &TypographyTokens) -> ThemeTypography {
+    ThemeTypography {
+        font_text: t.font_text.clone(),
+        font_mono: t.font_mono.clone(),
+        font_icon: t.font_icon.clone(),
+    }
+}
+
+fn icons_to_wire(i: &IconTokens) -> ThemeIcons {
+    ThemeIcons {
+        style: i.style.clone(),
+        duotone_secondary: i.duotone_secondary.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use levshell_config::{ColorTokens, ThemeMeta};
+
+    fn make_theme(name: &str, variant: &str, light_pair: Option<&str>) -> ThemeFile {
+        ThemeFile {
+            meta: ThemeMeta {
+                name: name.into(),
+                author: None,
+                variant: variant.into(),
+                light_pair: light_pair.map(str::to_string),
+                dark_pair: None,
+            },
+            colors: ColorTokens {
+                primary: Some("#123456".into()),
+                ..Default::default()
+            },
+            health: None,
+            bar: None,
+            typography: None,
+            icons: None,
+        }
+    }
+
+    #[test]
+    fn file_to_payload_passes_through_overrides() {
+        let t = make_theme("Test", "dark", Some("test-light"));
+        let p = file_to_payload(&t);
+        assert_eq!(p.name, "Test");
+        assert_eq!(p.variant, "dark");
+        assert_eq!(p.light_pair.as_deref(), Some("test-light"));
+        assert_eq!(p.colors.primary.as_deref(), Some("#123456"));
+        assert!(p.colors.bg.is_none());
+        assert_eq!(p.bar, ThemeBar::default());
+    }
+
+    #[test]
+    fn activate_missing_themes_dir_errors() {
+        let s = ThemeService::new(None, EventBus::new());
+        let err = s.activate("warm-dark").unwrap_err();
+        assert!(err.contains("no themes directory"));
+    }
+
+    #[test]
+    fn activate_unknown_theme_surfaces_load_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = ThemeService::new(Some(dir.path().to_path_buf()), EventBus::new());
+        let err = s.activate("no-such-theme").unwrap_err();
+        assert!(err.contains("no-such-theme") || err.contains("not found"));
+    }
+
+    #[test]
+    fn activate_happy_path_publishes_bus_event() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("tiny.toml"),
+            r##"
+[meta]
+name = "Tiny"
+variant = "dark"
+
+[colors]
+primary = "#7AA2F7"
+"##,
+        )
+        .unwrap();
+
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe("t", [levshell_core::EventKind::ThemeActivated], 4);
+        let s = ThemeService::new(Some(dir.path().to_path_buf()), bus);
+        let snap = s.activate("tiny").unwrap();
+        assert_eq!(snap.name, "Tiny");
+        assert_eq!(snap.variant, "dark");
+
+        match rx.try_recv() {
+            Ok(Event::ThemeActivated { name, variant }) => {
+                assert_eq!(name, "Tiny");
+                assert_eq!(variant, "dark");
+            }
+            other => panic!("expected ThemeActivated event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn toggle_mode_without_pair_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("solo.toml"),
+            r##"
+[meta]
+name = "Solo"
+variant = "dark"
+
+[colors]
+"##,
+        )
+        .unwrap();
+        let s = ThemeService::new(Some(dir.path().to_path_buf()), EventBus::new());
+        s.activate("solo").unwrap();
+        let err = s.toggle_mode().unwrap_err();
+        assert!(err.contains("light_pair") || err.contains("dark_pair"));
+    }
+
+    #[test]
+    fn toggle_mode_swaps_to_paired_theme() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("paired-dark.toml"),
+            r##"
+[meta]
+name = "Paired Dark"
+variant = "dark"
+light_pair = "paired-light"
+
+[colors]
+primary = "#111111"
+"##,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("paired-light.toml"),
+            r##"
+[meta]
+name = "Paired Light"
+variant = "light"
+dark_pair = "paired-dark"
+
+[colors]
+primary = "#EEEEEE"
+"##,
+        )
+        .unwrap();
+        let s = ThemeService::new(Some(dir.path().to_path_buf()), EventBus::new());
+        s.activate("paired-dark").unwrap();
+        let after = s.toggle_mode().unwrap();
+        assert_eq!(after.name, "Paired Light");
+        assert_eq!(after.variant, "light");
+    }
+
+    #[test]
+    fn list_returns_available_themes() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["a", "b"] {
+            std::fs::write(
+                dir.path().join(format!("{name}.toml")),
+                r##"
+[meta]
+name = "x"
+variant = "dark"
+[colors]
+"##,
+            )
+            .unwrap();
+        }
+        let s = ThemeService::new(Some(dir.path().to_path_buf()), EventBus::new());
+        assert_eq!(s.list(), vec!["a".to_string(), "b".to_string()]);
+    }
+}

@@ -21,11 +21,12 @@ pub use codec::{Codec, JsonCodec};
 pub use error::{IpcError, Result, MAX_FRAME_SIZE};
 pub use handshake::{
     ClientRole, CtlRequest, CtlResponse, Hello, PaletteAction, ProfileAction, ProjectSummary,
-    StatusSnapshot, PROTOCOL_VERSION,
+    StatusSnapshot, ThemeAction, ThemeSnapshot, PROTOCOL_VERSION,
 };
 pub use messages::{
     BarDensity, BarDensityState, BarLayout, CommandPaletteQuery, CommandPaletteSelect,
-    DaemonMessage, DensityChange, PowerState, Prominence, ShellMessage, WidgetAction, WidgetStatus,
+    DaemonMessage, DensityChange, PowerState, Prominence, ShellMessage, ThemeBar, ThemeColors,
+    ThemeHealth, ThemeIcons, ThemePayload, ThemeTypography, WidgetAction, WidgetStatus,
     WidgetUpdate, WidgetVisibility,
 };
 pub use publisher::{spawn_writer_task, WidgetPublisher, WriterTask};

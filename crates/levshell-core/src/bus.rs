@@ -144,6 +144,16 @@ pub enum Event {
         reachable: bool,
         latency_ms: Option<u32>,
     },
+
+    /// The daemon's active theme changed (spec design doc §11).
+    /// Emitted whenever [`crate::Module`]s need to react to a theme
+    /// switch — e.g. a future Sway-border propagator would subscribe
+    /// to keep the compositor's color scheme aligned. `variant` is
+    /// `"dark"` or `"light"`.
+    ThemeActivated {
+        name: String,
+        variant: String,
+    },
 }
 
 /// A discriminant for filtering subscriptions without instantiating an [`Event`].
@@ -164,6 +174,7 @@ pub enum EventKind {
     SyncError,
     NudgeDelivered,
     SshHostStatus,
+    ThemeActivated,
 }
 
 impl Event {
@@ -183,6 +194,7 @@ impl Event {
             Event::SyncError { .. } => EventKind::SyncError,
             Event::NudgeDelivered { .. } => EventKind::NudgeDelivered,
             Event::SshHostStatus { .. } => EventKind::SshHostStatus,
+            Event::ThemeActivated { .. } => EventKind::ThemeActivated,
         }
     }
 }

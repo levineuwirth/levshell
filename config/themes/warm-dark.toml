@@ -1,0 +1,68 @@
+# Levshell default theme — warm dark (Tokyo Night-inspired).
+#
+# Spec design doc §3.2.1 "Default Palette: Warm Dark" — deep
+# blue-purple backgrounds with warm undertones, optimized for
+# extended late-night sessions. This palette is the primary
+# design target; every other token check is validated against it
+# first.
+#
+# Copy this file into ~/.config/levshell/themes/ and run
+# `levshell-ctl theme set warm-dark` to activate it. You can also
+# copy the file under a new name and edit it to produce a custom
+# theme — every section except [meta] and [colors] is optional and
+# falls back to Theme.qml's built-in defaults.
+
+[meta]
+name = "Warm Dark"
+author = "Levshell"
+variant = "dark"
+light_pair = "warm-light"
+
+[colors]
+# 4-tier surface hierarchy (spec §3.2.1)
+bg             = "#1A1B26"
+bg_dark        = "#16161E"
+surface        = "#24283B"
+surface_raised = "#2F3549"
+overlay        = "#3B4261"
+
+# Content colors (§3.3)
+fg          = "#C0CAF5"
+fg_muted    = "#565F89"
+fg_subtle   = "#737AA2"
+on_primary  = "#1A1B26"
+on_surface  = "#C0CAF5"
+outline     = "#3B4261"
+
+# Accent colors (§3.4) — single primary
+primary           = "#7AA2F7"
+primary_variant   = "#5A7FD4"
+secondary         = "#BB9AF7"
+secondary_variant = "#9D7CD8"
+tertiary          = "#7DCFFF"
+
+# State colors (§3.5)
+success = "#9ECE6A"
+warning = "#E0AF68"
+error   = "#F7768E"
+info    = "#2AC3DE"
+
+[health]
+stale_pill = "#737AA2"
+error_pill = "#B8806A"
+
+[bar]
+opacity             = 0.80
+blur_radius         = 30
+opacity_battery     = 1.0
+blur_radius_battery = 0
+height_full         = 44
+height_compact      = 32
+
+[typography]
+font_text = "Spectral"
+font_mono = "IBM Plex Mono"
+font_icon = "Phosphor"
+
+[icons]
+style = "outlined"

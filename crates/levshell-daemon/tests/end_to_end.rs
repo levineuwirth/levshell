@@ -131,6 +131,7 @@ async fn daemon_publishes_widget_update_over_ipc_to_a_unixstream_shell() {
         socket_path: socket_path.clone(),
         publisher_capacity: 16,
             projects_dir: None,
+        themes_dir: None,
     };
 
     let factory: ModuleFactory = Box::new(|bus, publisher, _store, _projects| {
@@ -225,6 +226,7 @@ async fn boot_daemon(
         socket_path: socket_path.clone(),
         publisher_capacity: 16,
             projects_dir: None,
+        themes_dir: None,
     };
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
     let shutdown: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
@@ -349,6 +351,7 @@ async fn ctl_and_shell_coexist_with_shell_receiving_updates() {
         socket_path: socket_path.clone(),
         publisher_capacity: 16,
             projects_dir: None,
+        themes_dir: None,
     };
     let factory: ModuleFactory = Box::new(|bus, publisher, _store, _projects| {
         vec![Box::new(FakeModule { bus, publisher }) as Box<dyn Module>]
@@ -402,6 +405,7 @@ async fn memory_module_publishes_initial_widget_update_over_ipc() {
         socket_path: socket_path.clone(),
         publisher_capacity: 64,
             projects_dir: None,
+        themes_dir: None,
     };
     let factory: ModuleFactory = Box::new(|_bus, publisher, _store, _projects| {
         vec![Box::new(MemoryModule::new(publisher)) as Box<dyn Module>]
@@ -501,6 +505,7 @@ async fn context_engine_publishes_initial_bar_layout_on_shell_connect() {
         socket_path: socket_path.clone(),
         publisher_capacity: 64,
             projects_dir: None,
+        themes_dir: None,
     };
     let factory: ModuleFactory = Box::new(|_bus, publisher, _store, _projects| {
         vec![Box::new(default_context_engine(publisher)) as Box<dyn Module>]
@@ -555,6 +560,7 @@ async fn ctl_density_change_triggers_context_engine_republish() {
         socket_path: socket_path.clone(),
         publisher_capacity: 64,
             projects_dir: None,
+        themes_dir: None,
     };
     let factory: ModuleFactory = Box::new(|_bus, publisher, _store, _projects| {
         let rule = CompiledRule::new(
@@ -676,6 +682,7 @@ async fn ctl_palette_open_publishes_widget_update_with_results() {
         socket_path: socket_path.clone(),
         publisher_capacity: 64,
             projects_dir: None,
+        themes_dir: None,
     };
     let factory: ModuleFactory = Box::new(|_bus, publisher, _store, _projects| {
         let palette = PaletteModule::new(publisher)
@@ -808,6 +815,7 @@ async fn daemon_runs_obsidian_adapter_against_tempdir_vault() {
         socket_path: socket_path.clone(),
         publisher_capacity: 16,
             projects_dir: None,
+        themes_dir: None,
     };
     let factory = empty_factory();
 
@@ -880,6 +888,7 @@ async fn daemon_boots_with_empty_sync_factory() {
         socket_path: socket_path.clone(),
         publisher_capacity: 16,
             projects_dir: None,
+        themes_dir: None,
     };
 
     let sync_factory: SyncAdapterFactory = Box::new(Vec::new);
@@ -933,6 +942,7 @@ tags = ["demo"]
         socket_path: socket_path.clone(),
         publisher_capacity: 16,
         projects_dir: Some(projects_dir.path().to_path_buf()),
+        themes_dir: None,
     };
 
     // Pre-seed a note in the store so the ctl client has something to
@@ -1042,6 +1052,7 @@ async fn ctl_attach_without_registry_returns_error() {
         socket_path: socket_path.clone(),
         publisher_capacity: 16,
         projects_dir: None,
+        themes_dir: None,
     };
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();

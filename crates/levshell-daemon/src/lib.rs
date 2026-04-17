@@ -40,8 +40,9 @@ use levshell_data::{DataStore, EntityType};
 use levshell_ipc::{
     default_socket_path, spawn_writer_task, BarDensity, ClientRole, CtlRequest, CtlResponse, Hello,
     IpcConnection, IpcServer, JsonCodec, PaletteAction, ProfileAction, ProjectSummary,
-    ShellMessage, StatusSnapshot, WidgetPublisher, PROTOCOL_VERSION,
+    ShellMessage, StatusSnapshot, ThemeAction, WidgetPublisher, PROTOCOL_VERSION,
 };
+use levshell_modules::ThemeService;
 use levshell_projects::{ProjectRegistry, ProjectRegistryError};
 use levshell_sync::{SyncAdapter, SyncEngine, SyncEngineHandle};
 use thiserror::Error;
@@ -71,19 +72,25 @@ pub struct DaemonConfig {
     /// detach CtlRequests but returns an error pointing at the missing
     /// config dir.
     pub projects_dir: Option<PathBuf>,
+    /// Directory containing theme TOML files (spec design doc §11).
+    /// `None` means the shell falls back to Theme.qml's built-in
+    /// warm-dark defaults; `ctl theme set` returns a clean error.
+    pub themes_dir: Option<PathBuf>,
 }
 
 impl DaemonConfig {
     /// Defaults appropriate for the production binary:
     /// `$XDG_DATA_HOME/levshell/levshell.db` (or `~/.local/share/...`),
-    /// `$XDG_RUNTIME_DIR/levshell.sock`, and
-    /// `$XDG_CONFIG_HOME/levshell/projects/`.
+    /// `$XDG_RUNTIME_DIR/levshell.sock`,
+    /// `$XDG_CONFIG_HOME/levshell/projects/`, and
+    /// `$XDG_CONFIG_HOME/levshell/themes/`.
     pub fn with_defaults() -> Result<Self> {
         Ok(Self {
             db_path: default_db_path()?,
             socket_path: default_socket_path().context("resolving default socket path")?,
             publisher_capacity: 256,
             projects_dir: levshell_projects::default_projects_dir(),
+            themes_dir: levshell_config::default_themes_dir(),
         })
     }
 }
@@ -147,6 +154,10 @@ struct SharedState {
     /// `None` only when no projects directory was configured; every
     /// attach/detach against a `None` registry returns a clean error.
     projects: Option<ProjectRegistry>,
+    /// Theme service — used by `ctl theme` dispatch and bound to the
+    /// shell's `WidgetPublisher` on handshake so the shell paints the
+    /// active theme from first frame.
+    theme: Arc<ThemeService>,
 }
 
 /// The daemon entry point. See the module-level docs for the lifecycle.
@@ -229,6 +240,13 @@ pub async fn run_with_sync(
     // but the daemon keeps pulling from external sources.
     let sync_handle = start_sync_engine(&store, &bus, sync_factory);
 
+    // 2c. Build the theme service and load the default theme. The
+    // shell's WidgetPublisher binds later (on handshake); until then
+    // activate() records the theme in-memory so on-connect push
+    // catches the shell up with no re-load.
+    let theme = Arc::new(ThemeService::new(config.themes_dir.clone(), bus.clone()));
+    theme.load_default();
+
     // 3. Bind the IPC server.
     let server = IpcServer::bind(&config.socket_path)
         .with_context(|| format!("binding ipc socket at {}", config.socket_path.display()))?;
@@ -244,6 +262,7 @@ pub async fn run_with_sync(
         shell_connected: Arc::new(AtomicBool::new(false)),
         module_count: Arc::new(AtomicUsize::new(0)),
         projects: projects.clone(),
+        theme: theme.clone(),
     };
 
     // The factory is a FnOnce, but the accept loop runs many times. Wrap it
@@ -354,6 +373,12 @@ pub async fn run_with_sync(
                             state.shell_connected.clone(),
                             internal_shutdown_tx.take(),
                         );
+
+                        // Bind the theme service to this shell's
+                        // publisher. Pushes the currently-active
+                        // theme payload immediately so Theme.qml
+                        // applies overrides from first frame.
+                        theme.attach_publisher(writer_task.publisher.clone());
 
                         let modules = factory(
                             bus.clone(),
@@ -634,10 +659,43 @@ async fn dispatch_ctl_request(request: CtlRequest, state: &SharedState) -> CtlRe
             entity_id,
         } => dispatch_detach(state, &entity_type, &entity_id).await,
 
+        CtlRequest::Theme { action, name } => dispatch_theme(state, action, name),
+
         // `CtlRequest` is `#[non_exhaustive]`, so future variants land here
         // as a soft rejection instead of breaking the build.
         _ => CtlResponse::Error {
             message: "unsupported ctl request for this daemon version".into(),
+        },
+    }
+}
+
+fn dispatch_theme(
+    state: &SharedState,
+    action: ThemeAction,
+    name: Option<String>,
+) -> CtlResponse {
+    match action {
+        ThemeAction::Set => match name {
+            Some(n) => match state.theme.activate(&n) {
+                Ok(snap) => CtlResponse::ActiveTheme(snap),
+                Err(e) => CtlResponse::Error { message: e },
+            },
+            None => CtlResponse::Error {
+                message: "theme set: missing theme name".into(),
+            },
+        },
+        ThemeAction::ToggleMode => match state.theme.toggle_mode() {
+            Ok(snap) => CtlResponse::ActiveTheme(snap),
+            Err(e) => CtlResponse::Error { message: e },
+        },
+        ThemeAction::Query => match state.theme.snapshot() {
+            Some(snap) => CtlResponse::ActiveTheme(snap),
+            None => CtlResponse::Error {
+                message: "no theme active (themes dir missing or empty)".into(),
+            },
+        },
+        ThemeAction::List => CtlResponse::Themes {
+            names: state.theme.list(),
         },
     }
 }

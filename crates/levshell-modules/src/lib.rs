@@ -16,6 +16,7 @@ pub mod palette;
 pub mod remote;
 pub mod sway;
 pub mod telemetry;
+pub mod theme;
 
 pub use context_engine::{default_context_engine, default_widgets, ContextEngineModule};
 pub use ideation::{
@@ -29,6 +30,7 @@ pub use remote::{
     SshMonitorModule, SshRunner, GPU_WIDGET_ID, GPU_WIDGET_TYPE, JOBS_WIDGET_ID, JOBS_WIDGET_TYPE,
     SSH_WIDGET_ID, SSH_WIDGET_TYPE,
 };
+pub use theme::{ThemeService, DEFAULT_THEME_NAME};
 pub use palette::{
     AppLauncherProvider, NoteSearchProvider, PaletteItem, PaletteModule, PaletteProvider,
     PaletteState, WorkspaceSwitcherProvider, PALETTE_WIDGET_ID, PALETTE_WIDGET_TYPE,

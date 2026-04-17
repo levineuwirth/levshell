@@ -25,6 +25,18 @@ pub enum DaemonMessage {
     BarLayout(BarLayout),
     PowerState(PowerState),
     BarDensityState(BarDensityState),
+    /// Full theme payload sent on shell connect and whenever
+    /// `levshell-ctl theme set` activates a new theme. Fields mirror
+    /// the TOML structure (spec design doc §11) as partial overrides
+    /// — every inner field is `Option<String>` / `Option<f64>` so
+    /// the QML side applies only the tokens this theme chose to
+    /// override.
+    ///
+    /// Boxed because the variant is ~20 hex-string fields — leaving
+    /// it inline would bloat every other variant by the same amount
+    /// and blow out `TrySendError<DaemonMessage>` (clippy's
+    /// `result_large_err` / `large_enum_variant`).
+    Theme(Box<ThemePayload>),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -136,4 +148,122 @@ pub enum BarDensity {
     Full,
     Compact,
     Hidden,
+}
+
+// ---------------------------------------------------------------------------
+// Theme payload (spec design doc §11)
+// ---------------------------------------------------------------------------
+
+/// What the daemon sends to the shell after a theme load or
+/// `levshell-ctl theme set`. Mirrors [`levshell_config::ThemeFile`]
+/// closely but flattens `ThemeMeta` onto the root so QML consumers
+/// don't need to dot through `payload.meta.name`. Every override
+/// field is `Option<T>` — unspecified tokens fall back to the
+/// Theme.qml built-in defaults.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ThemePayload {
+    pub name: String,
+    /// `"dark"` or `"light"`.
+    pub variant: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub light_pair: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dark_pair: Option<String>,
+
+    #[serde(default)]
+    pub colors: ThemeColors,
+    #[serde(default)]
+    pub health: ThemeHealth,
+    #[serde(default)]
+    pub bar: ThemeBar,
+    #[serde(default)]
+    pub typography: ThemeTypography,
+    #[serde(default)]
+    pub icons: ThemeIcons,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ThemeColors {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bg: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bg_dark: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surface: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surface_raised: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overlay: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fg: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fg_muted: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fg_subtle: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_primary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_surface: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outline: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_variant: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secondary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secondary_variant: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tertiary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub success: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub info: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ThemeHealth {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stale_pill: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_pill: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ThemeBar {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opacity: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blur_radius: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opacity_battery: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blur_radius_battery: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height_full: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height_compact: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ThemeTypography {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_mono: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_icon: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ThemeIcons {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duotone_secondary: Option<String>,
 }
