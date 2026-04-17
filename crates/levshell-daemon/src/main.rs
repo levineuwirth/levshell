@@ -14,8 +14,8 @@ use levshell_modules::{
     default_context_engine, default_warmup_state_path, AppLauncherProvider, BatteryModule,
     CpuModule, FocusModeModule, GpuDashboardModule, HostRegistry, IdeationModule,
     InterruptionCostModule, MemoryModule, NetworkModule, NoteSearchProvider, PaletteModule,
-    PaletteProvider, RemoteJobsModule, RemoteRunner, SshMonitorModule, SshRunner,
-    SwayWorkspaceModule, WarmupModule, WorkspaceSwitcherProvider,
+    PaletteProvider, RemoteJobsModule, RemoteRunner, RubberDuckConfig, RubberDuckModule,
+    SshMonitorModule, SshRunner, SwayWorkspaceModule, WarmupModule, WorkspaceSwitcherProvider,
 };
 use levshell_sync::{
     AnkiConnectAdapter, AnkiConnectConfig, AnkiConnectConfigWatcher, CalDavAdapter, CalDavConfig,
@@ -88,6 +88,35 @@ async fn main() -> Result<()> {
     let warmup_config = levshell_config::default_config_base()
         .map(|dir| WarmupModule::load_config_from_dir(&dir))
         .unwrap_or_default();
+
+    // Rubber-duck module config (spec §2.12.6). Missing
+    // `rubber_duck.toml` is the common case — Ollama localhost +
+    // llama3.2:3b. File can tune the model and endpoint.
+    let rubber_duck_config = levshell_config::default_config_base()
+        .and_then(|dir| {
+            let path = dir.join("rubber_duck.toml");
+            if !path.exists() {
+                return None;
+            }
+            match RubberDuckConfig::load_from(&path) {
+                Ok(c) => Some(c),
+                Err(e) => {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %e,
+                        "failed to load rubber_duck.toml; using defaults"
+                    );
+                    None
+                }
+            }
+        })
+        .unwrap_or_default();
+    tracing::info!(
+        enabled = rubber_duck_config.enabled,
+        endpoint = rubber_duck_config.endpoint,
+        model = rubber_duck_config.model,
+        "rubber-duck config loaded"
+    );
     let warmup_state_path = default_warmup_state_path();
     tracing::info!(
         gap_secs = warmup_config.gap_secs,
@@ -133,6 +162,7 @@ async fn main() -> Result<()> {
         let host_registry = host_registry.clone();
         let warmup_config = warmup_config.clone();
         let warmup_state_path = warmup_state_path.clone();
+        let rubber_duck_config = rubber_duck_config.clone();
         Box::new(move |bus, publisher, store, projects| {
             let context_engine = default_context_engine(publisher.clone())
                 .with_shared_profiles(shared_profiles.clone());
@@ -158,6 +188,8 @@ async fn main() -> Result<()> {
                 warmup_config,
                 warmup_state_path,
             );
+            let rubber_duck =
+                RubberDuckModule::with_config(publisher.clone(), rubber_duck_config);
 
             // Single shared SshRunner across the three remote modules
             // so ControlMaster TCP connections are reused for every
@@ -192,6 +224,7 @@ async fn main() -> Result<()> {
                 Box::new(palette) as Box<dyn levshell_core::Module>,
                 Box::new(ideation) as Box<dyn levshell_core::Module>,
                 Box::new(warmup) as Box<dyn levshell_core::Module>,
+                Box::new(rubber_duck) as Box<dyn levshell_core::Module>,
                 Box::new(ssh_monitor) as Box<dyn levshell_core::Module>,
                 Box::new(gpu_dashboard) as Box<dyn levshell_core::Module>,
                 Box::new(remote_jobs) as Box<dyn levshell_core::Module>,

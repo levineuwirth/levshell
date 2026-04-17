@@ -13,7 +13,8 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use levshell_ipc::{
     default_socket_path, BarDensity, ClientRole, ContextSnapshotAction, CtlRequest, CtlResponse,
-    Hello, IpcConnection, JsonCodec, PaletteAction, ProfileAction, ThemeAction, WarmupAction,
+    DuckAction, Hello, IpcConnection, JsonCodec, PaletteAction, ProfileAction, ThemeAction,
+    WarmupAction,
 };
 use tokio::net::UnixStream;
 
@@ -100,6 +101,24 @@ enum Command {
         #[command(subcommand)]
         action: ContextCmd,
     },
+
+    /// Open / close / reset the rubber-duck debugger overlay
+    /// (spec §2.12.6). A minimal chat interface to a local LLM for
+    /// articulating stuck points.
+    Duck {
+        #[command(subcommand)]
+        action: DuckCmd,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum DuckCmd {
+    /// Reveal the overlay.
+    Open,
+    /// Hide the overlay without clearing the conversation.
+    Close,
+    /// Clear the conversation and close the overlay.
+    Reset,
 }
 
 #[derive(Debug, Subcommand)]
@@ -353,6 +372,17 @@ fn build_request(cmd: Command) -> CtlRequest {
             ContextCmd::Delete { name } => CtlRequest::ContextSnapshot {
                 action: ContextSnapshotAction::Delete,
                 name: Some(name),
+            },
+        },
+        Command::Duck { action } => match action {
+            DuckCmd::Open => CtlRequest::Duck {
+                action: DuckAction::Open,
+            },
+            DuckCmd::Close => CtlRequest::Duck {
+                action: DuckAction::Close,
+            },
+            DuckCmd::Reset => CtlRequest::Duck {
+                action: DuckAction::Reset,
             },
         },
     }

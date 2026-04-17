@@ -42,6 +42,20 @@ pub enum DaemonMessage {
     /// panel on receipt; dismissal is shell-local. Boxed for the same
     /// reason as [`Self::Theme`] — keeps `DaemonMessage` small.
     Warmup(Box<WarmupPayload>),
+    /// Tell the shell to render the rubber-duck overlay (spec §2.12.6).
+    DuckOpen,
+    /// Tell the shell to hide the rubber-duck overlay. The conversation
+    /// is not cleared — a subsequent [`Self::DuckOpen`] reveals the
+    /// same messages. Use [`Self::DuckReset`] to wipe.
+    DuckClose,
+    /// Wipe the shell's conversation state (daemon side has already
+    /// cleared). Sent in response to ctl `duck reset` or an overflow
+    /// safety condition.
+    DuckReset,
+    /// One streaming frame from the local LLM. `delta` is appended to
+    /// the active assistant turn; `done = true` finalizes it. `role`
+    /// is `"assistant"` in practice.
+    DuckToken(DuckToken),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -112,6 +126,11 @@ pub enum ShellMessage {
     /// no payload — close is idempotent.
     CommandPaletteClose,
     DensityChange(DensityChange),
+    /// The user typed a message in the rubber-duck overlay and hit
+    /// send (spec §2.12.6). The daemon appends to its conversation
+    /// vec and kicks off a streaming Ollama request, replying with a
+    /// sequence of [`DaemonMessage::DuckToken`] frames.
+    DuckSay(DuckSay),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -145,6 +164,26 @@ pub struct BarDensityState {
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DensityChange {
     pub mode: BarDensity,
+}
+
+/// User-typed message from the rubber-duck overlay (shell → daemon).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DuckSay {
+    pub text: String,
+}
+
+/// One streaming frame of an assistant reply (daemon → shell).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DuckToken {
+    /// `"assistant"` for every frame in practice; left as a string
+    /// so the shell renders whatever the model claims.
+    pub role: String,
+    /// Substring to append to the active assistant turn. Empty on
+    /// the final `done = true` frame.
+    pub delta: String,
+    /// `true` on the last frame — the shell uses this to commit the
+    /// assistant turn (stop the typing cursor, allow send again).
+    pub done: bool,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]

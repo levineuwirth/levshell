@@ -160,6 +160,17 @@ pub enum Event {
     /// overlay regardless of the gap heuristic. Stringly-typed to
     /// keep this crate free of `levshell-ipc` dependencies.
     WarmupActionRequested { action: String },
+
+    /// A ctl client requested a rubber-duck action (spec §2.12.6).
+    /// `action` is one of `"open"`, `"close"`, or `"reset"`.
+    /// Stringly-typed for the same reason as
+    /// [`Self::WarmupActionRequested`].
+    DuckActionRequested { action: String },
+
+    /// The shell forwarded a user-typed message into the rubber-duck
+    /// overlay (spec §2.12.6). The rubber-duck module appends it to
+    /// the conversation and kicks off a streaming reply.
+    DuckUserMessage { text: String },
 }
 
 /// A discriminant for filtering subscriptions without instantiating an [`Event`].
@@ -182,6 +193,8 @@ pub enum EventKind {
     SshHostStatus,
     ThemeActivated,
     WarmupActionRequested,
+    DuckActionRequested,
+    DuckUserMessage,
 }
 
 impl Event {
@@ -203,6 +216,8 @@ impl Event {
             Event::SshHostStatus { .. } => EventKind::SshHostStatus,
             Event::ThemeActivated { .. } => EventKind::ThemeActivated,
             Event::WarmupActionRequested { .. } => EventKind::WarmupActionRequested,
+            Event::DuckActionRequested { .. } => EventKind::DuckActionRequested,
+            Event::DuckUserMessage { .. } => EventKind::DuckUserMessage,
         }
     }
 }

@@ -87,6 +87,14 @@ Scope {
     property bool warmupOpen: false
     property var warmupPayload: ({ fired_at: "", events: [], anki_due_count: 0, projects: [] })
 
+    // Rubber-duck (§2.12.6). Messages are plain objects
+    //   { role: "user" | "assistant", content: string }
+    // Streaming tokens append to the latest assistant message; when
+    // duckStreaming is true the input field disables send.
+    property bool duckOpen: false
+    property bool duckStreaming: false
+    property var duckMessages: []
+
     function toggleNotificationCenter() {
         notificationCenterOpen = !notificationCenterOpen;
         if (notificationCenterOpen) { clockHubOpen = false; quickSettingsOpen = false; }
@@ -203,8 +211,54 @@ Scope {
             shell.warmupOpen = true;
             break;
         }
+        case "duck_open": {
+            shell.duckOpen = true;
+            break;
+        }
+        case "duck_close": {
+            shell.duckOpen = false;
+            break;
+        }
+        case "duck_reset": {
+            shell.duckMessages = [];
+            shell.duckStreaming = false;
+            break;
+        }
+        case "duck_token": {
+            shell.appendDuckToken(msg);
+            break;
+        }
         default:
             break;
+        }
+    }
+
+    // Append a DuckToken frame to duckMessages. If there's no active
+    // assistant turn yet (the last message is a user turn, or the
+    // list is empty), open a new one with the delta; otherwise
+    // concatenate onto the trailing assistant message. `done` flips
+    // duckStreaming back off so the input re-enables.
+    function appendDuckToken(msg) {
+        const role = msg.role || "assistant";
+        const delta = msg.delta || "";
+        const done = msg.done === true;
+
+        if (delta.length > 0) {
+            const messages = shell.duckMessages.slice();
+            const last = messages.length > 0 ? messages[messages.length - 1] : null;
+            if (last && last.role === role) {
+                messages[messages.length - 1] = {
+                    role: last.role,
+                    content: last.content + delta
+                };
+            } else {
+                messages.push({ role: role, content: delta });
+            }
+            shell.duckMessages = messages;
+        }
+
+        if (done) {
+            shell.duckStreaming = false;
         }
     }
 
@@ -433,6 +487,20 @@ Scope {
 
     function sendPaletteClose() {
         shell.sendShellMessage({ type: "command_palette_close" });
+    }
+
+    // Rubber-duck send (§2.12.6). Appends the user turn locally so the
+    // overlay reflects it immediately, then sends the text to the
+    // daemon and flips duckStreaming true until the `done` token
+    // frame arrives.
+    function sendDuckMessage(text) {
+        const trimmed = text.trim();
+        if (trimmed.length === 0 || shell.duckStreaming) return;
+        const messages = shell.duckMessages.slice();
+        messages.push({ role: "user", content: trimmed });
+        shell.duckMessages = messages;
+        shell.duckStreaming = true;
+        shell.sendShellMessage({ type: "duck_say", text: trimmed });
     }
 
     // ----------------------------------------------------------------------
@@ -749,6 +817,66 @@ Scope {
             isOpen: shell.warmupOpen
             payload: shell.warmupPayload
             onDismissed: shell.warmupOpen = false
+        }
+    }
+
+    // ----------------------------------------------------------------------
+    // Rubber-duck overlay (spec §2.12.6).
+    //
+    // Same shell as warmup: full-screen darkened PanelWindow with a
+    // centered chat card. Escape closes the overlay (conversation
+    // persists; `ctl duck reset` wipes it). The TextInput holds
+    // exclusive keyboard focus via WlrLayershell.
+    // ----------------------------------------------------------------------
+    PanelWindow {
+        id: duckWindow
+
+        property bool isClosing: false
+        visible: shell.duckOpen || isClosing
+
+        Connections {
+            target: shell
+            function onDuckOpenChanged() {
+                if (shell.duckOpen) {
+                    duckWindow.isClosing = false;
+                    duckCloseTimer.stop();
+                } else if (duckWindow.visible && !duckWindow.isClosing) {
+                    duckWindow.isClosing = true;
+                    duckCloseTimer.restart();
+                }
+            }
+        }
+
+        Timer {
+            id: duckCloseTimer
+            interval: Theme.motionSlow + 50
+            onTriggered: duckWindow.isClosing = false
+        }
+
+        WlrLayershell.layer: WlrLayer.Overlay
+        WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
+        WlrLayershell.namespace: "levshell-duck"
+
+        BackgroundEffect.blurRegion: Region {
+            item: duckPanel
+        }
+
+        anchors { top: true; left: true; right: true; bottom: true }
+        color: Qt.rgba(0, 0, 0, 0.35)
+
+        MouseArea {
+            anchors.fill: parent
+            onClicked: shell.duckOpen = false
+        }
+
+        RubberDuckOverlay {
+            id: duckPanel
+            anchors.centerIn: parent
+            isOpen: shell.duckOpen
+            messages: shell.duckMessages
+            streaming: shell.duckStreaming
+            onDismissed: shell.duckOpen = false
+            onSubmit: (text) => shell.sendDuckMessage(text)
         }
     }
 

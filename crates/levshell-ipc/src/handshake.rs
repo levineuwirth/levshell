@@ -132,6 +132,23 @@ pub enum CtlRequest {
         #[serde(default)]
         name: Option<String>,
     },
+
+    /// Open / close / reset the rubber-duck overlay (spec §2.12.6).
+    Duck { action: DuckAction },
+}
+
+/// What to do with the rubber-duck overlay. See [`CtlRequest::Duck`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum DuckAction {
+    /// Reveal the overlay. Conversation persists from the previous
+    /// session (until daemon restart).
+    Open,
+    /// Hide the overlay without clearing the conversation.
+    Close,
+    /// Clear the conversation and close the overlay.
+    Reset,
 }
 
 /// What to do with a named context snapshot. See

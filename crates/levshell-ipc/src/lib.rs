@@ -20,15 +20,15 @@ mod server;
 pub use codec::{Codec, JsonCodec};
 pub use error::{IpcError, Result, MAX_FRAME_SIZE};
 pub use handshake::{
-    ClientRole, ContextSnapshotAction, CtlRequest, CtlResponse, Hello, PaletteAction,
+    ClientRole, ContextSnapshotAction, CtlRequest, CtlResponse, DuckAction, Hello, PaletteAction,
     ProfileAction, ProjectSummary, StatusSnapshot, ThemeAction, ThemeSnapshot, WarmupAction,
     PROTOCOL_VERSION,
 };
 pub use messages::{
     BarDensity, BarDensityState, BarLayout, CommandPaletteQuery, CommandPaletteSelect,
-    DaemonMessage, DensityChange, PowerState, Prominence, ShellMessage, ThemeBar, ThemeColors,
-    ThemeHealth, ThemeIcons, ThemePayload, ThemeTypography, WarmupEvent, WarmupPayload,
-    WarmupProject, WidgetAction, WidgetStatus, WidgetUpdate, WidgetVisibility,
+    DaemonMessage, DensityChange, DuckSay, DuckToken, PowerState, Prominence, ShellMessage,
+    ThemeBar, ThemeColors, ThemeHealth, ThemeIcons, ThemePayload, ThemeTypography, WarmupEvent,
+    WarmupPayload, WarmupProject, WidgetAction, WidgetStatus, WidgetUpdate, WidgetVisibility,
 };
 pub use publisher::{spawn_writer_task, WidgetPublisher, WriterTask};
 pub use server::{default_socket_path, IpcConnection, IpcReader, IpcServer, IpcWriter};

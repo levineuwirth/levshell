@@ -24,10 +24,11 @@ toml.workspace = true
 tracing.workspace = true
 async-trait.workspace = true
 futures-util.workspace = true
+reqwest.workspace = true
 swayipc-async.workspace = true
-tokio = { workspace = true, features = ["rt", "sync", "time", "macros", "process", "io-util"] }
+tokio = { workspace = true, features = ["rt", "sync", "time", "macros", "process", "io-util", "net"] }
 uuid.workspace = true
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "net"] }
 tempfile = "3"

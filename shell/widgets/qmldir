@@ -8,3 +8,4 @@ NetworkWidget 1.0 NetworkWidget.qml
 NotificationsWidget 1.0 NotificationsWidget.qml
 CommandPalette 1.0 CommandPalette.qml
 WarmupOverlay 1.0 WarmupOverlay.qml
+RubberDuckOverlay 1.0 RubberDuckOverlay.qml

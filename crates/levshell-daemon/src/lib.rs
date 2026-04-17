@@ -39,7 +39,7 @@ use levshell_core::{Event, EventBus, Module, ModuleRunner};
 use levshell_data::{DataStore, EntityType};
 use levshell_ipc::{
     default_socket_path, spawn_writer_task, BarDensity, ClientRole, ContextSnapshotAction,
-    CtlRequest, CtlResponse, Hello, IpcConnection, IpcServer, JsonCodec, PaletteAction,
+    CtlRequest, CtlResponse, DuckAction, Hello, IpcConnection, IpcServer, JsonCodec, PaletteAction,
     ProfileAction, ProjectSummary, ShellMessage, StatusSnapshot, ThemeAction, WarmupAction,
     WidgetPublisher, PROTOCOL_VERSION,
 };
@@ -563,6 +563,10 @@ fn route_shell_message(bus: &EventBus, msg: ShellMessage) {
                 "shell: widget action (ignored)"
             );
         }
+        ShellMessage::DuckSay(s) => {
+            tracing::debug!(chars = s.text.len(), "shell: duck say");
+            bus.publish(Event::DuckUserMessage { text: s.text });
+        }
         // ShellMessage is `#[non_exhaustive]` so unknown future variants
         // land here as a soft-ignore instead of breaking the build.
         _ => {
@@ -677,6 +681,23 @@ async fn dispatch_ctl_request(request: CtlRequest, state: &SharedState) -> CtlRe
 
         CtlRequest::ContextSnapshot { action, name } => {
             dispatch_context_snapshot(action, name).await
+        }
+
+        CtlRequest::Duck { action } => {
+            let action_str = match action {
+                DuckAction::Open => "open",
+                DuckAction::Close => "close",
+                DuckAction::Reset => "reset",
+                _ => {
+                    return CtlResponse::Error {
+                        message: "duck: unsupported action for this daemon version".into(),
+                    }
+                }
+            };
+            state.bus.publish(Event::DuckActionRequested {
+                action: action_str.to_owned(),
+            });
+            CtlResponse::Ok
         }
 
         // `CtlRequest` is `#[non_exhaustive]`, so future variants land here

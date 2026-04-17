@@ -13,6 +13,7 @@
 pub mod context_engine;
 pub mod context_snapshot;
 pub mod focus;
+pub mod rubber_duck;
 pub mod ideation;
 pub mod interruption;
 pub mod palette;
@@ -28,6 +29,9 @@ pub use context_snapshot::{
     ContextSnapshot, ContextSnapshotError, OperationSummary, WindowSnapshot,
 };
 pub use focus::{FocusModeModule, FocusModeTracker, TriggerAction, TriggerInput, TriggerPhase};
+pub use rubber_duck::{
+    default_rubber_duck_config_path, RubberDuckConfig, RubberDuckConfigError, RubberDuckModule,
+};
 pub use ideation::{
     IdeationConfig, IdeationConfigError, IdeationModule, Nudge, NudgeContext, NudgeKind,
     NudgeSelector, NudgeWeights, RecentEntity,
