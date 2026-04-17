@@ -1,13 +1,29 @@
-// QuickSettings — quick-settings flyout scaffold (§2.1.7).
+// QuickSettings — quick-settings flyout (§2.1.7, §12.4).
 //
-// Phase 1 scaffold: 2-column toggle-tile grid with placeholder tiles
-// for Wi-Fi, Bluetooth, DnD, Night Light. Volume and brightness
-// sliders are stubs. Full implementation (PipeWire for audio,
-// brightnessctl for display, BlueZ D-Bus for Bluetooth) lands in a
-// later phase.
+// Toggle tiles (Wi-Fi / Bluetooth / DnD / Night-Light) remain placeholders
+// until the respective subsystems are wired in. Volume and brightness
+// sliders are backed by real state:
+//
+//   - Volume  → Quickshell.Services.Pipewire default sink. `audio.volume`
+//               and `audio.muted` are writable so long as the node is
+//               held by a PwObjectTracker. The track fill reads from the
+//               sink; dragging or tapping the slider writes back.
+//
+//   - Brightness → `brightnessctl -m info` parses to
+//                  `device,class,current,percent,max`. We read the 4th
+//                  field on flyout open (and every 5s while open so
+//                  keyboard brightness keys reflect) and write via
+//                  `brightnessctl -q set N%`.
+//
+// The slider is a minimal custom Item (no QtQuick.Controls dep) — plain
+// Rectangle track with a dragged handle and a filling Rectangle to the
+// handle's left.
 
 import QtQuick
 import QtQuick.Effects
+import Quickshell
+import Quickshell.Io
+import Quickshell.Services.Pipewire
 import ".."
 
 Rectangle {
@@ -17,13 +33,82 @@ Rectangle {
     property bool doNotDisturb: false
     signal dndToggled()
 
-    // Tile model: each tile has an icon, label, and active state.
-    // Phase 1: only DnD is functional; others are visual stubs.
+    // -------------------------------------------------------------------
+    // PipeWire default audio sink — tracked so audio.volume / audio.muted
+    // accept writes. Unlike the `audio` read-only properties, writes go
+    // through the tracker.
+    // -------------------------------------------------------------------
+    PwObjectTracker {
+        objects: Pipewire.defaultAudioSink ? [Pipewire.defaultAudioSink] : []
+    }
+
+    readonly property PwNode sink: Pipewire.defaultAudioSink
+    readonly property bool sinkReady: sink !== null && sink.ready && sink.audio !== null
+    readonly property real audioVolume: sinkReady ? sink.audio.volume : 0.0
+    readonly property bool audioMuted:  sinkReady ? sink.audio.muted : false
+
+    function setVolume(v) {
+        if (!sinkReady) return;
+        sink.audio.volume = Math.max(0, Math.min(1, v));
+    }
+    function toggleMute() {
+        if (!sinkReady) return;
+        sink.audio.muted = !sink.audio.muted;
+    }
+
+    // -------------------------------------------------------------------
+    // Brightness via brightnessctl. No device argument — brightnessctl
+    // auto-selects the first backlight class device, which matches what
+    // keyboard brightness keys (e.g. XF86MonBrightnessUp) target.
+    // -------------------------------------------------------------------
+    property real brightnessFrac: 0.0   // 0..1
+    property bool brightnessReady: false
+
+    function refreshBrightness() { brightnessInfoProc.running = true }
+    function setBrightness(frac) {
+        const pct = Math.max(1, Math.min(100, Math.round(frac * 100)));
+        brightnessSetProc.command = ["brightnessctl", "-q", "set", pct + "%"];
+        brightnessSetProc.running = true;
+        root.brightnessFrac = pct / 100;
+    }
+
+    Process {
+        id: brightnessInfoProc
+        command: ["brightnessctl", "-m", "info"]
+        stdout: StdioCollector {
+            onStreamFinished: {
+                const line = text.trim();
+                const parts = line.split(",");
+                if (parts.length >= 4) {
+                    const pct = parseFloat(parts[3].replace("%", ""));
+                    if (!isNaN(pct)) {
+                        root.brightnessFrac = pct / 100;
+                        root.brightnessReady = true;
+                    }
+                }
+            }
+        }
+    }
+    Process { id: brightnessSetProc }
+
+    Timer {
+        id: brightnessPoll
+        interval: 5000
+        running: root.isOpen && root.brightnessReady
+        repeat: true
+        onTriggered: root.refreshBrightness()
+    }
+    Component.onCompleted: refreshBrightness()
+    onIsOpenChanged: if (isOpen) refreshBrightness()
+
+    // -------------------------------------------------------------------
+    // Tile model — only DnD is functional.
+    // -------------------------------------------------------------------
     readonly property var tiles: [
-        { icon: Theme.iconWifiHigh,   label: "Wi-Fi",      active: true,  stub: true },
-        { icon: "\uE0A0",            label: "Bluetooth",   active: false, stub: true },
+        { icon: Theme.iconWifiHigh,   label: "Wi-Fi",          active: true,             stub: true  },
+        { icon: "\uE0A0",             label: "Bluetooth",      active: false,            stub: true  },
         { icon: Theme.iconBellSlash,  label: "Do Not Disturb", active: root.doNotDisturb, stub: false },
-        { icon: "\uE334",            label: "Night Light", active: false, stub: true },
+        { icon: "\uE334",             label: "Night Light",    active: false,            stub: true  },
     ]
 
     implicitWidth: 320
@@ -46,7 +131,6 @@ Rectangle {
         autoPaddingEnabled: true
     }
 
-    // Open/close animation.
     opacity: 0.0; scale: 0.96
     transformOrigin: Item.TopRight
 
@@ -73,13 +157,60 @@ Rectangle {
 
     MouseArea { anchors.fill: parent; onClicked: (e) => e.accepted = true }
 
+    // -------------------------------------------------------------------
+    // Inline slider component. Emits moved() continuously while dragging
+    // and released() on mouse-up so consumers can choose to write on every
+    // frame (volume — cheap) or only on release (brightness — shells out).
+    // -------------------------------------------------------------------
+    component LevSlider: Item {
+        id: slider
+        property real value: 0.0
+        property color fillColor: Theme.primary
+        property bool dim: false
+        signal moved(real v)
+        signal released(real v)
+
+        implicitHeight: 18
+
+        Rectangle {
+            id: track
+            anchors.verticalCenter: parent.verticalCenter
+            width: parent.width
+            height: 6
+            radius: 3
+            color: Theme.surfaceRaised
+
+            Rectangle {
+                width: parent.width * Math.max(0, Math.min(1, slider.value))
+                height: parent.height
+                radius: parent.radius
+                color: slider.dim ? Theme.fgSubtle : slider.fillColor
+                Behavior on color { ColorAnimation { duration: Theme.motionFast } }
+            }
+        }
+
+        MouseArea {
+            id: hit
+            anchors.fill: parent
+            cursorShape: Qt.PointingHandCursor
+            preventStealing: true
+            onPressed: (e) => applyX(e.x)
+            onPositionChanged: (e) => { if (pressed) applyX(e.x) }
+            onReleased: slider.released(slider.value)
+            function applyX(x) {
+                const v = Math.max(0, Math.min(1, x / width));
+                slider.value = v;
+                slider.moved(v);
+            }
+        }
+    }
+
     Column {
         id: contentCol
         anchors.fill: parent
         anchors.margins: Theme.panelInnerPadding
         spacing: Theme.spaceMd
 
-        // Header.
         Text {
             text: "Quick Settings"
             color: Theme.fg
@@ -88,7 +219,6 @@ Rectangle {
             font.weight: Theme.typeTitleWeight
         }
 
-        // Toggle tile grid (2 columns).
         Grid {
             columns: 2
             width: parent.width
@@ -105,10 +235,7 @@ Rectangle {
                     color: modelData.active ? Theme.primary : Theme.surfaceRaised
                     border.width: modelData.active ? 0 : 1
                     border.color: Theme.outline
-
-                    Behavior on color {
-                        ColorAnimation { duration: Theme.motionFast }
-                    }
+                    Behavior on color { ColorAnimation { duration: Theme.motionFast } }
 
                     Row {
                         anchors.centerIn: parent
@@ -137,71 +264,78 @@ Rectangle {
                         cursorShape: Qt.PointingHandCursor
                         onClicked: {
                             if (modelData.stub) return;
-                            if (modelData.label === "Do Not Disturb") {
+                            if (modelData.label === "Do Not Disturb")
                                 root.dndToggled();
-                            }
                         }
                     }
                 }
             }
         }
 
-        // Divider.
         Rectangle { width: parent.width; height: 1; color: Theme.outline; opacity: 0.5 }
 
-        // Volume slider placeholder.
-        Column {
+        // Volume row: mute-toggle icon + slider.
+        Row {
             width: parent.width
-            spacing: Theme.spaceXs
+            spacing: Theme.spaceSm
 
             Text {
-                text: "Volume"
-                color: Theme.fgSubtle
-                font.family: Theme.fontText
-                font.pixelSize: Theme.typeLabel
-                font.weight: Theme.typeLabelWeight
+                id: volIcon
+                width: 28
+                anchors.verticalCenter: parent.verticalCenter
+                horizontalAlignment: Text.AlignHCenter
+                text: root.audioMuted || !root.sinkReady
+                    ? Theme.iconSpeakerSlash
+                    : Theme.iconSpeakerHigh
+                color: root.sinkReady ? Theme.fg : Theme.fgSubtle
+                font.family: Theme.fontIcon
+                font.pixelSize: 20
+
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    enabled: root.sinkReady
+                    onClicked: root.toggleMute()
+                }
             }
 
-            Rectangle {
-                width: parent.width
-                height: 6
-                radius: 3
-                color: Theme.surfaceRaised
-
-                Rectangle {
-                    width: parent.width * 0.65
-                    height: parent.height
-                    radius: parent.radius
-                    color: Theme.primary
-                }
+            LevSlider {
+                id: volSlider
+                width: parent.width - volIcon.width - Theme.spaceSm
+                anchors.verticalCenter: parent.verticalCenter
+                dim: root.audioMuted || !root.sinkReady
+                // Bidirectional: reflect sink volume unless the user is dragging.
+                value: root.audioVolume
+                onMoved: (v) => root.setVolume(v)
+                onReleased: (v) => root.setVolume(v)
             }
         }
 
-        // Brightness slider placeholder.
-        Column {
+        // Brightness row: sun icon + slider.
+        Row {
             width: parent.width
-            spacing: Theme.spaceXs
+            spacing: Theme.spaceSm
 
             Text {
-                text: "Brightness"
-                color: Theme.fgSubtle
-                font.family: Theme.fontText
-                font.pixelSize: Theme.typeLabel
-                font.weight: Theme.typeLabelWeight
+                id: brightIcon
+                width: 28
+                anchors.verticalCenter: parent.verticalCenter
+                horizontalAlignment: Text.AlignHCenter
+                text: Theme.iconSun
+                color: root.brightnessReady ? Theme.fg : Theme.fgSubtle
+                font.family: Theme.fontIcon
+                font.pixelSize: 20
             }
 
-            Rectangle {
-                width: parent.width
-                height: 6
-                radius: 3
-                color: Theme.surfaceRaised
-
-                Rectangle {
-                    width: parent.width * 0.80
-                    height: parent.height
-                    radius: parent.radius
-                    color: Theme.primary
-                }
+            LevSlider {
+                id: brightSlider
+                width: parent.width - brightIcon.width - Theme.spaceSm
+                anchors.verticalCenter: parent.verticalCenter
+                dim: !root.brightnessReady
+                value: root.brightnessFrac
+                // Drag feedback is instant in-QML; the shell-out happens
+                // on release so we don't spawn a process per frame.
+                onReleased: (v) => root.setBrightness(v)
             }
         }
     }

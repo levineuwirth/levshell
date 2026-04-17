@@ -302,6 +302,11 @@ QtObject {
     readonly property string iconBellSlash:       "\uE0D0"  // ph-bell-slash
     readonly property string iconX:               "\uE4F6"  // ph-x
 
+    // Quick-settings — PipeWire volume state + brightness.
+    readonly property string iconSpeakerHigh:     "\uE44A"  // ph-speaker-high
+    readonly property string iconSpeakerSlash:    "\uE45A"  // ph-speaker-slash (muted)
+    readonly property string iconSun:             "\uE472"  // ph-sun (brightness)
+
     // Status indicator icon aliases (referenced by WidgetWrapper).
     readonly property string statusIconStale: iconClockCountdown
     readonly property string statusIconError: iconWarning
