@@ -20,8 +20,9 @@ mod server;
 pub use codec::{Codec, JsonCodec};
 pub use error::{IpcError, Result, MAX_FRAME_SIZE};
 pub use handshake::{
-    ClientRole, CtlRequest, CtlResponse, Hello, PaletteAction, ProfileAction, ProjectSummary,
-    StatusSnapshot, ThemeAction, ThemeSnapshot, WarmupAction, PROTOCOL_VERSION,
+    ClientRole, ContextSnapshotAction, CtlRequest, CtlResponse, Hello, PaletteAction,
+    ProfileAction, ProjectSummary, StatusSnapshot, ThemeAction, ThemeSnapshot, WarmupAction,
+    PROTOCOL_VERSION,
 };
 pub use messages::{
     BarDensity, BarDensityState, BarLayout, CommandPaletteQuery, CommandPaletteSelect,

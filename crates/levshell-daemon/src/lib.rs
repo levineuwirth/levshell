@@ -38,11 +38,15 @@ use anyhow::{Context, Result};
 use levshell_core::{Event, EventBus, Module, ModuleRunner};
 use levshell_data::{DataStore, EntityType};
 use levshell_ipc::{
-    default_socket_path, spawn_writer_task, BarDensity, ClientRole, CtlRequest, CtlResponse, Hello,
-    IpcConnection, IpcServer, JsonCodec, PaletteAction, ProfileAction, ProjectSummary,
-    ShellMessage, StatusSnapshot, ThemeAction, WarmupAction, WidgetPublisher, PROTOCOL_VERSION,
+    default_socket_path, spawn_writer_task, BarDensity, ClientRole, ContextSnapshotAction,
+    CtlRequest, CtlResponse, Hello, IpcConnection, IpcServer, JsonCodec, PaletteAction,
+    ProfileAction, ProjectSummary, ShellMessage, StatusSnapshot, ThemeAction, WarmupAction,
+    WidgetPublisher, PROTOCOL_VERSION,
 };
-use levshell_modules::ThemeService;
+use levshell_modules::{
+    default_contexts_dir, delete_snapshot, list_snapshots, restore_snapshot, save_current,
+    ThemeService,
+};
 use levshell_projects::{ProjectRegistry, ProjectRegistryError};
 use levshell_sync::{SyncAdapter, SyncEngine, SyncEngineHandle};
 use thiserror::Error;
@@ -671,10 +675,64 @@ async fn dispatch_ctl_request(request: CtlRequest, state: &SharedState) -> CtlRe
             CtlResponse::Ok
         }
 
+        CtlRequest::ContextSnapshot { action, name } => {
+            dispatch_context_snapshot(action, name).await
+        }
+
         // `CtlRequest` is `#[non_exhaustive]`, so future variants land here
         // as a soft rejection instead of breaking the build.
         _ => CtlResponse::Error {
             message: "unsupported ctl request for this daemon version".into(),
+        },
+    }
+}
+
+async fn dispatch_context_snapshot(
+    action: ContextSnapshotAction,
+    name: Option<String>,
+) -> CtlResponse {
+    let dir = default_contexts_dir();
+    match action {
+        ContextSnapshotAction::List => CtlResponse::ContextSnapshots {
+            names: list_snapshots(&dir),
+        },
+        ContextSnapshotAction::Save => match name {
+            Some(n) => match save_current(&n, &dir).await {
+                Ok(s) => CtlResponse::ContextSnapshotResult { summary: s.message },
+                Err(e) => CtlResponse::Error {
+                    message: format!("context save: {e}"),
+                },
+            },
+            None => CtlResponse::Error {
+                message: "context save: missing snapshot name".into(),
+            },
+        },
+        ContextSnapshotAction::Restore => match name {
+            Some(n) => match restore_snapshot(&n, &dir).await {
+                Ok(s) => CtlResponse::ContextSnapshotResult { summary: s.message },
+                Err(e) => CtlResponse::Error {
+                    message: format!("context restore: {e}"),
+                },
+            },
+            None => CtlResponse::Error {
+                message: "context restore: missing snapshot name".into(),
+            },
+        },
+        ContextSnapshotAction::Delete => match name {
+            Some(n) => match delete_snapshot(&n, &dir) {
+                Ok(s) => CtlResponse::ContextSnapshotResult { summary: s.message },
+                Err(e) => CtlResponse::Error {
+                    message: format!("context delete: {e}"),
+                },
+            },
+            None => CtlResponse::Error {
+                message: "context delete: missing snapshot name".into(),
+            },
+        },
+        // ContextSnapshotAction is non_exhaustive; new variants land
+        // here as a soft rejection until the daemon is updated.
+        _ => CtlResponse::Error {
+            message: "context: unsupported action for this daemon version".into(),
         },
     }
 }

@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 
 pub mod context_engine;
+pub mod context_snapshot;
 pub mod focus;
 pub mod ideation;
 pub mod interruption;
@@ -22,6 +23,10 @@ pub mod telemetry;
 pub mod theme;
 
 pub use context_engine::{default_context_engine, default_widgets, ContextEngineModule};
+pub use context_snapshot::{
+    default_contexts_dir, delete_snapshot, list_snapshots, restore_snapshot, save_current,
+    ContextSnapshot, ContextSnapshotError, OperationSummary, WindowSnapshot,
+};
 pub use focus::{FocusModeModule, FocusModeTracker, TriggerAction, TriggerInput, TriggerPhase};
 pub use ideation::{
     IdeationConfig, IdeationConfigError, IdeationModule, Nudge, NudgeContext, NudgeKind,

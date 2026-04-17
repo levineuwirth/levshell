@@ -123,6 +123,34 @@ pub enum CtlRequest {
     /// regardless of recent activity. v1 only supports `open`; other
     /// actions (query, dismiss) will land when the use case demands.
     Warmup { action: WarmupAction },
+
+    /// Save / restore / list / delete a named context snapshot
+    /// (spec §2.12.2). `name` is required for save/restore/delete
+    /// and ignored for list.
+    ContextSnapshot {
+        action: ContextSnapshotAction,
+        #[serde(default)]
+        name: Option<String>,
+    },
+}
+
+/// What to do with a named context snapshot. See
+/// [`CtlRequest::ContextSnapshot`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ContextSnapshotAction {
+    /// Capture the current sway tree into `name`, overwriting any
+    /// existing snapshot with the same name.
+    Save,
+    /// Apply the saved snapshot `name` — move existing windows to
+    /// their saved workspaces and re-launch any missing apps via the
+    /// captured cmdline.
+    Restore,
+    /// List saved snapshot names.
+    List,
+    /// Delete the saved snapshot `name`.
+    Delete,
 }
 
 /// The daemon's reply to a [`CtlRequest`]. Exactly one of these is written
@@ -152,6 +180,17 @@ pub enum CtlResponse {
     /// Available theme names (file stems). Returned for
     /// [`ThemeAction::List`].
     Themes {
+        names: Vec<String>,
+    },
+    /// Human-readable summary of a context save / restore / delete
+    /// operation (spec §2.12.2). Carries a single line the ctl client
+    /// prints verbatim.
+    ContextSnapshotResult {
+        summary: String,
+    },
+    /// Saved context snapshot names. Returned for
+    /// [`ContextSnapshotAction::List`].
+    ContextSnapshots {
         names: Vec<String>,
     },
 }

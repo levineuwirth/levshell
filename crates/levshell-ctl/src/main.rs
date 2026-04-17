@@ -12,8 +12,8 @@ use std::process::ExitCode;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use levshell_ipc::{
-    default_socket_path, BarDensity, ClientRole, CtlRequest, CtlResponse, Hello, IpcConnection,
-    JsonCodec, PaletteAction, ProfileAction, ThemeAction, WarmupAction,
+    default_socket_path, BarDensity, ClientRole, ContextSnapshotAction, CtlRequest, CtlResponse,
+    Hello, IpcConnection, JsonCodec, PaletteAction, ProfileAction, ThemeAction, WarmupAction,
 };
 use tokio::net::UnixStream;
 
@@ -90,6 +90,37 @@ enum Command {
     Warmup {
         #[command(subcommand)]
         action: WarmupCmd,
+    },
+
+    /// Save / restore / list / delete named context snapshots
+    /// (spec §2.12.2). A snapshot captures the current sway window
+    /// tree + per-window cmdline; restore moves existing windows back
+    /// and re-launches any missing apps.
+    Context {
+        #[command(subcommand)]
+        action: ContextCmd,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ContextCmd {
+    /// Capture the current sway tree into `<name>`.
+    Save {
+        /// Snapshot name. Ascii-alphanumeric + `-`/`_` only.
+        name: String,
+    },
+    /// Apply the saved snapshot `<name>` — move existing windows,
+    /// re-launch missing ones via captured cmdlines.
+    Restore {
+        /// Snapshot name.
+        name: String,
+    },
+    /// List saved snapshot names.
+    List,
+    /// Delete the saved snapshot `<name>`.
+    Delete {
+        /// Snapshot name.
+        name: String,
     },
 }
 
@@ -306,6 +337,24 @@ fn build_request(cmd: Command) -> CtlRequest {
                 action: WarmupAction::Open,
             },
         },
+        Command::Context { action } => match action {
+            ContextCmd::Save { name } => CtlRequest::ContextSnapshot {
+                action: ContextSnapshotAction::Save,
+                name: Some(name),
+            },
+            ContextCmd::Restore { name } => CtlRequest::ContextSnapshot {
+                action: ContextSnapshotAction::Restore,
+                name: Some(name),
+            },
+            ContextCmd::List => CtlRequest::ContextSnapshot {
+                action: ContextSnapshotAction::List,
+                name: None,
+            },
+            ContextCmd::Delete { name } => CtlRequest::ContextSnapshot {
+                action: ContextSnapshotAction::Delete,
+                name: Some(name),
+            },
+        },
     }
 }
 
@@ -365,6 +414,16 @@ fn print_response(response: &CtlResponse) {
         }
         CtlResponse::Error { message } => {
             eprintln!("error: {message}");
+        }
+        CtlResponse::ContextSnapshotResult { summary } => println!("{summary}"),
+        CtlResponse::ContextSnapshots { names } => {
+            if names.is_empty() {
+                println!("(no saved contexts)");
+            } else {
+                for n in names {
+                    println!("{n}");
+                }
+            }
         }
         // `CtlResponse` is `#[non_exhaustive]`; future variants print a
         // placeholder so old ctl binaries stay usable against newer daemons.
