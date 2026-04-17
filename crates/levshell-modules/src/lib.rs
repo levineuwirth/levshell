@@ -14,6 +14,7 @@ pub mod context_engine;
 pub mod ideation;
 pub mod interruption;
 pub mod palette;
+pub mod warmup;
 pub mod remote;
 pub mod sway;
 pub mod telemetry;
@@ -36,6 +37,10 @@ pub use remote::{
     SSH_WIDGET_ID, SSH_WIDGET_TYPE,
 };
 pub use theme::{ThemeService, DEFAULT_THEME_NAME};
+pub use warmup::{
+    default_warmup_config_path, default_warmup_state_path, PersistedWarmupState, TriggerState,
+    WarmupConfig, WarmupConfigError, WarmupModule,
+};
 pub use palette::{
     AppLauncherProvider, NoteSearchProvider, PaletteItem, PaletteModule, PaletteProvider,
     PaletteState, WorkspaceSwitcherProvider, PALETTE_WIDGET_ID, PALETTE_WIDGET_TYPE,

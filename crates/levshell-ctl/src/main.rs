@@ -13,7 +13,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use levshell_ipc::{
     default_socket_path, BarDensity, ClientRole, CtlRequest, CtlResponse, Hello, IpcConnection,
-    JsonCodec, PaletteAction, ProfileAction, ThemeAction,
+    JsonCodec, PaletteAction, ProfileAction, ThemeAction, WarmupAction,
 };
 use tokio::net::UnixStream;
 
@@ -83,6 +83,20 @@ enum Command {
         #[command(subcommand)]
         action: ThemeCmd,
     },
+
+    /// Force-fire the warmup overlay (spec §2.12.1). Bypasses the
+    /// activity-gap heuristic so you can see the panel without
+    /// waiting hours.
+    Warmup {
+        #[command(subcommand)]
+        action: WarmupCmd,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum WarmupCmd {
+    /// Open the warmup overlay now.
+    Open,
 }
 
 #[derive(Debug, Subcommand)]
@@ -285,6 +299,11 @@ fn build_request(cmd: Command) -> CtlRequest {
             ThemeCmd::List => CtlRequest::Theme {
                 action: ThemeAction::List,
                 name: None,
+            },
+        },
+        Command::Warmup { action } => match action {
+            WarmupCmd::Open => CtlRequest::Warmup {
+                action: WarmupAction::Open,
             },
         },
     }

@@ -37,6 +37,11 @@ pub enum DaemonMessage {
     /// and blow out `TrySendError<DaemonMessage>` (clippy's
     /// `result_large_err` / `large_enum_variant`).
     Theme(Box<ThemePayload>),
+    /// Full warmup payload sent when the daemon decides to fire the
+    /// ramp-up overlay (spec §2.12.1). The shell opens the warmup
+    /// panel on receipt; dismissal is shell-local. Boxed for the same
+    /// reason as [`Self::Theme`] — keeps `DaemonMessage` small.
+    Warmup(Box<WarmupPayload>),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -266,4 +271,51 @@ pub struct ThemeIcons {
     pub style: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duotone_secondary: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Warmup payload (spec §2.12.1)
+// ---------------------------------------------------------------------------
+
+/// Ramp-up data assembled by the warmup module and pushed to the shell
+/// when the trigger fires. The three section arrays may be empty
+/// (e.g. no CalDAV events today); the shell renders empty-state copy
+/// in that case rather than hiding the section.
+///
+/// Wall-clock timestamps are serialized as RFC 3339 strings so the QML
+/// side can `new Date(str)` directly — no Z vs. offset parsing.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct WarmupPayload {
+    /// UTC wall-clock of the fire. Shown as "Good morning / afternoon"
+    /// headline and as a "fired at" debug hint.
+    pub fired_at: String,
+    /// Events starting today in the user's local timezone.
+    pub events: Vec<WarmupEvent>,
+    /// Flashcards due on or before `fired_at`.
+    pub anki_due_count: u32,
+    /// Active projects (status != complete), newest-active first.
+    pub projects: Vec<WarmupProject>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WarmupEvent {
+    pub title: String,
+    /// RFC 3339 UTC.
+    pub start_at: String,
+    /// RFC 3339 UTC.
+    pub end_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WarmupProject {
+    pub name: String,
+    /// One of `active`, `simmering`, `blocked`, `writing_up`.
+    pub status: String,
+    /// Seconds since the project was last active during the live
+    /// session, or `None` if it has never been focused since daemon
+    /// start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_secs: Option<u64>,
 }

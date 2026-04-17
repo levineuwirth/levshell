@@ -11,10 +11,11 @@ use anyhow::Result;
 use levshell_config::{load_profiles_from_dir, spawn_profile_watcher};
 use levshell_daemon::{init_tracing, run_with_sync, DaemonConfig, ModuleFactory, SyncAdapterFactory};
 use levshell_modules::{
-    default_context_engine, AppLauncherProvider, BatteryModule, CpuModule, GpuDashboardModule,
-    HostRegistry, IdeationModule, InterruptionCostModule, MemoryModule, NetworkModule,
-    NoteSearchProvider, PaletteModule, PaletteProvider, RemoteJobsModule, RemoteRunner,
-    SshMonitorModule, SshRunner, SwayWorkspaceModule, WorkspaceSwitcherProvider,
+    default_context_engine, default_warmup_state_path, AppLauncherProvider, BatteryModule,
+    CpuModule, GpuDashboardModule, HostRegistry, IdeationModule, InterruptionCostModule,
+    MemoryModule, NetworkModule, NoteSearchProvider, PaletteModule, PaletteProvider,
+    RemoteJobsModule, RemoteRunner, SshMonitorModule, SshRunner, SwayWorkspaceModule,
+    WarmupModule, WorkspaceSwitcherProvider,
 };
 use levshell_sync::{
     AnkiConnectAdapter, AnkiConnectConfig, AnkiConnectConfigWatcher, CalDavAdapter, CalDavConfig,
@@ -82,6 +83,19 @@ async fn main() -> Result<()> {
         "ideation engine config loaded"
     );
 
+    // Warmup module config (spec §2.12.1). Missing `warmup.toml` is
+    // the common case — 4h gap, no calendar-day trigger.
+    let warmup_config = levshell_config::default_config_base()
+        .map(|dir| WarmupModule::load_config_from_dir(&dir))
+        .unwrap_or_default();
+    let warmup_state_path = default_warmup_state_path();
+    tracing::info!(
+        gap_secs = warmup_config.gap_secs,
+        calendar_day_trigger = warmup_config.calendar_day_trigger,
+        state = %warmup_state_path.display(),
+        "warmup module config loaded"
+    );
+
     // Host registry for the SSH / GPU / remote-jobs triad. Read once
     // at boot — a future phase will add inotify hot-reload matching
     // profiles/projects. Missing directory is normal (no remote
@@ -117,6 +131,8 @@ async fn main() -> Result<()> {
         let shared_profiles = shared_profiles.clone();
         let ideation_config = ideation_config.clone();
         let host_registry = host_registry.clone();
+        let warmup_config = warmup_config.clone();
+        let warmup_state_path = warmup_state_path.clone();
         Box::new(move |bus, publisher, store, projects| {
             let context_engine = default_context_engine(publisher.clone())
                 .with_shared_profiles(shared_profiles);
@@ -130,9 +146,16 @@ async fn main() -> Result<()> {
             let ideation = IdeationModule::with_config(
                 bus.clone(),
                 publisher.clone(),
+                store.clone(),
+                projects.clone(),
+                ideation_config,
+            );
+            let warmup = WarmupModule::with_config(
+                publisher.clone(),
                 store,
                 projects,
-                ideation_config,
+                warmup_config,
+                warmup_state_path,
             );
 
             // Single shared SshRunner across the three remote modules
@@ -166,6 +189,7 @@ async fn main() -> Result<()> {
                 Box::new(NetworkModule::new(publisher)) as Box<dyn levshell_core::Module>,
                 Box::new(palette) as Box<dyn levshell_core::Module>,
                 Box::new(ideation) as Box<dyn levshell_core::Module>,
+                Box::new(warmup) as Box<dyn levshell_core::Module>,
                 Box::new(ssh_monitor) as Box<dyn levshell_core::Module>,
                 Box::new(gpu_dashboard) as Box<dyn levshell_core::Module>,
                 Box::new(remote_jobs) as Box<dyn levshell_core::Module>,

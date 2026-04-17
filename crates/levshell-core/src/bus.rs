@@ -154,6 +154,12 @@ pub enum Event {
         name: String,
         variant: String,
     },
+
+    /// A ctl client requested a warmup-overlay action (spec §2.12.1).
+    /// The only meaningful action for v1 is `"open"` — force-fire the
+    /// overlay regardless of the gap heuristic. Stringly-typed to
+    /// keep this crate free of `levshell-ipc` dependencies.
+    WarmupActionRequested { action: String },
 }
 
 /// A discriminant for filtering subscriptions without instantiating an [`Event`].
@@ -175,6 +181,7 @@ pub enum EventKind {
     NudgeDelivered,
     SshHostStatus,
     ThemeActivated,
+    WarmupActionRequested,
 }
 
 impl Event {
@@ -195,6 +202,7 @@ impl Event {
             Event::NudgeDelivered { .. } => EventKind::NudgeDelivered,
             Event::SshHostStatus { .. } => EventKind::SshHostStatus,
             Event::ThemeActivated { .. } => EventKind::ThemeActivated,
+            Event::WarmupActionRequested { .. } => EventKind::WarmupActionRequested,
         }
     }
 }

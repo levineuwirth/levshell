@@ -118,6 +118,11 @@ pub enum CtlRequest {
         #[serde(default)]
         name: Option<String>,
     },
+    /// Force-fire the warmup overlay (spec §2.12.1). Bypasses the gap
+    /// heuristic — the daemon assembles and pushes a fresh payload
+    /// regardless of recent activity. v1 only supports `open`; other
+    /// actions (query, dismiss) will land when the use case demands.
+    Warmup { action: WarmupAction },
 }
 
 /// The daemon's reply to a [`CtlRequest`]. Exactly one of these is written
@@ -226,4 +231,11 @@ pub enum ThemeAction {
     Query,
     /// Enumerate available theme names.
     List,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WarmupAction {
+    /// Force-fire the warmup overlay now.
+    Open,
 }

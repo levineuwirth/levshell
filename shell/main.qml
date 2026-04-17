@@ -84,6 +84,8 @@ Scope {
     property var notifArrivalTimes: ({})
     property bool clockHubOpen: false
     property bool quickSettingsOpen: false
+    property bool warmupOpen: false
+    property var warmupPayload: ({ fired_at: "", events: [], anki_due_count: 0, projects: [] })
 
     function toggleNotificationCenter() {
         notificationCenterOpen = !notificationCenterOpen;
@@ -189,6 +191,16 @@ Scope {
         }
         case "theme": {
             shell.applyTheme(msg);
+            break;
+        }
+        case "warmup": {
+            shell.warmupPayload = {
+                fired_at: msg.fired_at || "",
+                events: msg.events || [],
+                anki_due_count: msg.anki_due_count || 0,
+                projects: msg.projects || []
+            };
+            shell.warmupOpen = true;
             break;
         }
         default:
@@ -680,6 +692,63 @@ Scope {
             isOpen: shell.quickSettingsOpen
             doNotDisturb: shell.doNotDisturb
             onDndToggled: shell.doNotDisturb = !shell.doNotDisturb
+        }
+    }
+
+    // ----------------------------------------------------------------------
+    // Warmup overlay (§2.12.1).
+    //
+    // Centered card fired on first activity after a ≥4h gap, or via
+    // `levshell-ctl warmup open`. Keyboard focus is grabbed so Escape
+    // dismisses. Clicking outside also dismisses.
+    // ----------------------------------------------------------------------
+    PanelWindow {
+        id: warmupWindow
+
+        property bool isClosing: false
+        visible: shell.warmupOpen || isClosing
+
+        Connections {
+            target: shell
+            function onWarmupOpenChanged() {
+                if (shell.warmupOpen) {
+                    warmupWindow.isClosing = false;
+                    warmupCloseTimer.stop();
+                } else if (warmupWindow.visible && !warmupWindow.isClosing) {
+                    warmupWindow.isClosing = true;
+                    warmupCloseTimer.restart();
+                }
+            }
+        }
+
+        Timer {
+            id: warmupCloseTimer
+            interval: Theme.motionSlow + 50
+            onTriggered: warmupWindow.isClosing = false
+        }
+
+        WlrLayershell.layer: WlrLayer.Overlay
+        WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
+        WlrLayershell.namespace: "levshell-warmup"
+
+        BackgroundEffect.blurRegion: Region {
+            item: warmupPanel
+        }
+
+        anchors { top: true; left: true; right: true; bottom: true }
+        color: Qt.rgba(0, 0, 0, 0.35)
+
+        MouseArea {
+            anchors.fill: parent
+            onClicked: shell.warmupOpen = false
+        }
+
+        WarmupOverlay {
+            id: warmupPanel
+            anchors.centerIn: parent
+            isOpen: shell.warmupOpen
+            payload: shell.warmupPayload
+            onDismissed: shell.warmupOpen = false
         }
     }
 

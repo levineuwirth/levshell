@@ -40,7 +40,7 @@ use levshell_data::{DataStore, EntityType};
 use levshell_ipc::{
     default_socket_path, spawn_writer_task, BarDensity, ClientRole, CtlRequest, CtlResponse, Hello,
     IpcConnection, IpcServer, JsonCodec, PaletteAction, ProfileAction, ProjectSummary,
-    ShellMessage, StatusSnapshot, ThemeAction, WidgetPublisher, PROTOCOL_VERSION,
+    ShellMessage, StatusSnapshot, ThemeAction, WarmupAction, WidgetPublisher, PROTOCOL_VERSION,
 };
 use levshell_modules::ThemeService;
 use levshell_projects::{ProjectRegistry, ProjectRegistryError};
@@ -660,6 +660,16 @@ async fn dispatch_ctl_request(request: CtlRequest, state: &SharedState) -> CtlRe
         } => dispatch_detach(state, &entity_type, &entity_id).await,
 
         CtlRequest::Theme { action, name } => dispatch_theme(state, action, name),
+
+        CtlRequest::Warmup { action } => {
+            let action_str = match action {
+                WarmupAction::Open => "open",
+            };
+            state.bus.publish(Event::WarmupActionRequested {
+                action: action_str.to_owned(),
+            });
+            CtlResponse::Ok
+        }
 
         // `CtlRequest` is `#[non_exhaustive]`, so future variants land here
         // as a soft rejection instead of breaking the build.
