@@ -171,6 +171,20 @@ pub enum Event {
     /// overlay (spec §2.12.6). The rubber-duck module appends it to
     /// the conversation and kicks off a streaming reply.
     DuckUserMessage { text: String },
+
+    /// A widget's [`crate::Module`]-owned escalation tracker crossed
+    /// into Critical (spec design §9 rule 3). The
+    /// `NotificationsModule` subscribes to this event and forwards
+    /// it to both the shell (as `DaemonMessage::CriticalEscalation`
+    /// for the in-bar flash) and the Freedesktop notification daemon
+    /// (so the alert reaches the user even when the widget is
+    /// hidden). Fires once per entry; a drop followed by re-entry
+    /// fires again.
+    CriticalEscalation {
+        widget_id: String,
+        title: String,
+        body: String,
+    },
 }
 
 /// A discriminant for filtering subscriptions without instantiating an [`Event`].
@@ -195,6 +209,7 @@ pub enum EventKind {
     WarmupActionRequested,
     DuckActionRequested,
     DuckUserMessage,
+    CriticalEscalation,
 }
 
 impl Event {
@@ -218,6 +233,7 @@ impl Event {
             Event::WarmupActionRequested { .. } => EventKind::WarmupActionRequested,
             Event::DuckActionRequested { .. } => EventKind::DuckActionRequested,
             Event::DuckUserMessage { .. } => EventKind::DuckUserMessage,
+            Event::CriticalEscalation { .. } => EventKind::CriticalEscalation,
         }
     }
 }

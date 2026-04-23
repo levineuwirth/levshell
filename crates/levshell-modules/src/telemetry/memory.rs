@@ -10,9 +10,9 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
-use levshell_core::{Module, ModuleError, ModuleResult, WidgetDescriptor};
+use levshell_core::{Event, EventBus, Module, ModuleError, ModuleResult, WidgetDescriptor};
 use levshell_ipc::{
-    CriticalEscalation, DaemonMessage, EscalationLevel, WidgetPublisher, WidgetStatus, WidgetUpdate,
+    DaemonMessage, EscalationLevel, WidgetPublisher, WidgetStatus, WidgetUpdate,
 };
 use serde::{Deserialize, Serialize};
 
@@ -89,13 +89,15 @@ impl MemoryState {
 }
 
 pub struct MemoryModule {
+    bus: EventBus,
     publisher: WidgetPublisher,
     escalation: EscalationTracker,
 }
 
 impl MemoryModule {
-    pub fn new(publisher: WidgetPublisher) -> Self {
+    pub fn new(bus: EventBus, publisher: WidgetPublisher) -> Self {
         Self {
+            bus,
             publisher,
             escalation: EscalationTracker::new(),
         }
@@ -130,14 +132,11 @@ impl MemoryModule {
             tracing::warn!(error = %e, "telemetry-memory: failed to publish WidgetUpdate");
         }
         if outcome.entered_critical {
-            let msg = DaemonMessage::CriticalEscalation(CriticalEscalation {
+            self.bus.publish(Event::CriticalEscalation {
                 widget_id: MEMORY_WIDGET_ID.into(),
                 title: "Memory critically high".into(),
                 body: format!("Memory at {:.0}%", state.used_percent),
             });
-            if let Err(e) = self.publisher.try_send(msg) {
-                tracing::warn!(error = %e, "telemetry-memory: failed to publish CriticalEscalation");
-            }
         }
     }
 }

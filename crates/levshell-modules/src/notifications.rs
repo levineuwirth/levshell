@@ -1,0 +1,270 @@
+//! Freedesktop notification bridge for spec design §9 rule 3.
+//!
+//! Telemetry modules emit [`Event::CriticalEscalation`] when a widget's
+//! escalation tracker crosses into `Critical`. This module subscribes
+//! to that event and fans it out to:
+//!
+//! 1. the **shell**, as `DaemonMessage::CriticalEscalation` — powers
+//!    the in-bar full-sat flash even when the user looks up mid-tick
+//!    (though the `WidgetUpdate`'s `escalation` field already does the
+//!    bulk of the visual work);
+//! 2. the **Freedesktop notification daemon**, via `notify-rust` — the
+//!    spec's "escape hatch when the widget is hidden." Sent with
+//!    Urgency::Critical so compositors that honour it keep the toast
+//!    up until dismissed.
+//!
+//! The OS-side call is abstracted behind [`NotificationSender`] so
+//! tests can inject a spy and assert on call patterns without touching
+//! D-Bus. Production wires in [`NotifyRustSender`].
+//!
+//! Send failures are logged and swallowed — a headless environment
+//! without a running notification daemon still gets the shell channel
+//! + tracing log, which is enough for the user to notice on resume.
+
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use levshell_core::{Event, EventKind, Module, ModuleResult};
+use levshell_ipc::{CriticalEscalation, DaemonMessage, WidgetPublisher};
+
+const MODULE_NAME: &str = "notifications";
+
+/// Abstraction over the OS-side notification call so tests don't need
+/// a live D-Bus session. Implementations are expected to be cheap to
+/// call (production impl does all work in a blocking D-Bus round-trip,
+/// which is acceptable at Critical cadence — a Critical entry happens
+/// at most every few seconds per widget).
+pub trait NotificationSender: Send + Sync {
+    fn send_critical(&self, widget_id: &str, title: &str, body: &str)
+        -> Result<(), String>;
+}
+
+/// Production sender: invokes `notify-rust` with Urgency::Critical.
+pub struct NotifyRustSender;
+
+impl NotificationSender for NotifyRustSender {
+    fn send_critical(
+        &self,
+        _widget_id: &str,
+        title: &str,
+        body: &str,
+    ) -> Result<(), String> {
+        notify_rust::Notification::new()
+            .summary(title)
+            .body(body)
+            .urgency(notify_rust::Urgency::Critical)
+            .show()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+}
+
+pub struct NotificationsModule {
+    publisher: WidgetPublisher,
+    sender: Arc<dyn NotificationSender>,
+}
+
+impl NotificationsModule {
+    pub fn new(publisher: WidgetPublisher, sender: Arc<dyn NotificationSender>) -> Self {
+        Self { publisher, sender }
+    }
+
+    /// Production constructor — wires in [`NotifyRustSender`].
+    pub fn with_notify_rust(publisher: WidgetPublisher) -> Self {
+        Self::new(publisher, Arc::new(NotifyRustSender))
+    }
+}
+
+#[async_trait]
+impl Module for NotificationsModule {
+    fn name(&self) -> &str {
+        MODULE_NAME
+    }
+
+    fn subscribed_events(&self) -> Vec<EventKind> {
+        vec![EventKind::CriticalEscalation]
+    }
+
+    async fn on_event(&mut self, event: &Event) -> ModuleResult<()> {
+        if let Event::CriticalEscalation {
+            widget_id,
+            title,
+            body,
+        } = event
+        {
+            let msg = DaemonMessage::CriticalEscalation(CriticalEscalation {
+                widget_id: widget_id.clone(),
+                title: title.clone(),
+                body: body.clone(),
+            });
+            if let Err(e) = self.publisher.try_send(msg) {
+                tracing::warn!(
+                    error = %e,
+                    widget_id = %widget_id,
+                    "notifications: shell channel drop"
+                );
+            }
+            if let Err(e) = self.sender.send_critical(widget_id, title, body) {
+                tracing::warn!(
+                    error = %e,
+                    widget_id = %widget_id,
+                    "notifications: OS notification send failed"
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use levshell_ipc::{spawn_writer_task, IpcWriter, JsonCodec};
+    use std::sync::Mutex;
+    use tokio::io::duplex;
+
+    struct SpySender {
+        calls: Mutex<Vec<(String, String, String)>>,
+        result: Mutex<Result<(), String>>,
+    }
+
+    impl SpySender {
+        fn with_result(result: Result<(), String>) -> Self {
+            Self {
+                calls: Mutex::new(Vec::new()),
+                result: Mutex::new(result),
+            }
+        }
+
+        fn calls(&self) -> Vec<(String, String, String)> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    impl NotificationSender for SpySender {
+        fn send_critical(
+            &self,
+            widget_id: &str,
+            title: &str,
+            body: &str,
+        ) -> Result<(), String> {
+            self.calls.lock().unwrap().push((
+                widget_id.to_string(),
+                title.to_string(),
+                body.to_string(),
+            ));
+            self.result.lock().unwrap().clone()
+        }
+    }
+
+    async fn module_with_spy(
+        spy: Arc<SpySender>,
+    ) -> (NotificationsModule, tokio::sync::mpsc::Receiver<DaemonMessage>) {
+        // A live publisher whose writer task we drop immediately; we
+        // snoop the DaemonMessage::CriticalEscalation forwarding via
+        // the writer task's inbound channel by spawning a loopback.
+        let (a, b) = duplex(4096);
+        let w = IpcWriter::from_parts(a, JsonCodec);
+        let task = spawn_writer_task(w, 16);
+        // Spawn a reader that decodes frames off `b`.
+        let (fwd_tx, fwd_rx) = tokio::sync::mpsc::channel::<DaemonMessage>(16);
+        tokio::spawn(async move {
+            use tokio::io::AsyncReadExt;
+            let mut b = b;
+            let mut buf = Vec::new();
+            let mut scratch = [0u8; 1024];
+            loop {
+                let n = match b.read(&mut scratch).await {
+                    Ok(0) => break,
+                    Ok(n) => n,
+                    Err(_) => break,
+                };
+                buf.extend_from_slice(&scratch[..n]);
+                while let Some(nl) = buf.iter().position(|&c| c == b'\n') {
+                    let line: Vec<u8> = buf.drain(..=nl).collect();
+                    if let Ok(msg) =
+                        serde_json::from_slice::<DaemonMessage>(&line[..line.len() - 1])
+                    {
+                        let _ = fwd_tx.send(msg).await;
+                    }
+                }
+            }
+        });
+        let module = NotificationsModule::new(task.publisher, spy);
+        (module, fwd_rx)
+    }
+
+    #[tokio::test]
+    async fn on_event_forwards_critical_to_sender_and_publisher() {
+        let spy = Arc::new(SpySender::with_result(Ok(())));
+        let (mut module, mut fwd) = module_with_spy(spy.clone()).await;
+        module
+            .on_event(&Event::CriticalEscalation {
+                widget_id: "cpu".into(),
+                title: "CPU critically high".into(),
+                body: "CPU sustained at 96%".into(),
+            })
+            .await
+            .unwrap();
+
+        let msg = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            fwd.recv(),
+        )
+        .await
+        .expect("expected DaemonMessage within 200ms")
+        .expect("channel open");
+        match msg {
+            DaemonMessage::CriticalEscalation(p) => {
+                assert_eq!(p.widget_id, "cpu");
+                assert_eq!(p.title, "CPU critically high");
+                assert_eq!(p.body, "CPU sustained at 96%");
+            }
+            other => panic!("unexpected DaemonMessage: {other:?}"),
+        }
+
+        let calls = spy.calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "cpu");
+        assert_eq!(calls[0].1, "CPU critically high");
+    }
+
+    #[tokio::test]
+    async fn on_event_ignores_unrelated_events() {
+        let spy = Arc::new(SpySender::with_result(Ok(())));
+        let (mut module, _fwd) = module_with_spy(spy.clone()).await;
+        module
+            .on_event(&Event::PowerStateChanged { on_battery: true })
+            .await
+            .unwrap();
+        assert!(spy.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn sender_failure_does_not_fail_on_event() {
+        let spy = Arc::new(SpySender::with_result(Err("no dbus".into())));
+        let (mut module, _fwd) = module_with_spy(spy.clone()).await;
+        let result = module
+            .on_event(&Event::CriticalEscalation {
+                widget_id: "battery".into(),
+                title: "Battery critically low".into(),
+                body: "Battery at 3%".into(),
+            })
+            .await;
+        assert!(result.is_ok(), "send failure must be swallowed");
+        assert_eq!(spy.calls().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn module_subscribes_to_critical_escalation() {
+        let spy: Arc<dyn NotificationSender> =
+            Arc::new(SpySender::with_result(Ok(())));
+        let (a, _b) = duplex(32);
+        let w = IpcWriter::from_parts(a, JsonCodec);
+        let task = spawn_writer_task(w, 4);
+        let m = NotificationsModule::new(task.publisher, spy);
+        let subs = m.subscribed_events();
+        assert_eq!(subs.len(), 1);
+        assert_eq!(subs[0], EventKind::CriticalEscalation);
+    }
+}

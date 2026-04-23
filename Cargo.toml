@@ -66,6 +66,12 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 # iCalendar (.ics) parsing for the CalDAV sync adapter
 icalendar = "0.17"
 
+# Freedesktop notifications — spec design §9 rule 3 critical-escalation
+# escape hatch when a widget is hidden. `z` feature picks the
+# pure-Rust zbus backend so we don't pull libdbus C bindings into the
+# build.
+notify-rust = { version = "4", default-features = false, features = ["z"] }
+
 # Internal crates (referenced by path so each crate inherits the workspace version)
 levshell-core    = { path = "crates/levshell-core",    version = "0.1.0" }
 levshell-data    = { path = "crates/levshell-data",    version = "0.1.0" }

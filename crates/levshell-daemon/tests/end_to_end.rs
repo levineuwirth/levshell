@@ -409,8 +409,8 @@ async fn memory_module_publishes_initial_widget_update_over_ipc() {
             projects_dir: None,
         themes_dir: None,
     };
-    let factory: ModuleFactory = Box::new(|_bus, publisher, _store, _projects| {
-        vec![Box::new(MemoryModule::new(publisher)) as Box<dyn Module>]
+    let factory: ModuleFactory = Box::new(|bus, publisher, _store, _projects| {
+        vec![Box::new(MemoryModule::new(bus, publisher)) as Box<dyn Module>]
     });
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
     let shutdown: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =

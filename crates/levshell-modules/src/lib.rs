@@ -14,6 +14,7 @@ pub mod context_engine;
 pub mod context_snapshot;
 pub mod escalation;
 pub mod focus;
+pub mod notifications;
 pub mod rubber_duck;
 pub mod ideation;
 pub mod interruption;
@@ -30,6 +31,7 @@ pub use context_snapshot::{
     ContextSnapshot, ContextSnapshotError, OperationSummary, WindowSnapshot,
 };
 pub use escalation::{EscalationTracker, TickOutcome};
+pub use notifications::{NotificationSender, NotificationsModule, NotifyRustSender};
 pub use focus::{FocusModeModule, FocusModeTracker, TriggerAction, TriggerInput, TriggerPhase};
 pub use rubber_duck::{
     default_rubber_duck_config_path, RubberDuckConfig, RubberDuckConfigError, RubberDuckModule,

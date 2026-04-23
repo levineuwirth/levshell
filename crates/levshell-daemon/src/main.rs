@@ -13,9 +13,10 @@ use levshell_daemon::{init_tracing, run_with_sync, DaemonConfig, ModuleFactory, 
 use levshell_modules::{
     default_context_engine, default_warmup_state_path, AppLauncherProvider, BatteryModule,
     CpuModule, FocusModeModule, GpuDashboardModule, HostRegistry, IdeationModule,
-    InterruptionCostModule, MemoryModule, NetworkModule, NoteSearchProvider, PaletteModule,
-    PaletteProvider, RemoteJobsModule, RemoteRunner, RubberDuckConfig, RubberDuckModule,
-    SshMonitorModule, SshRunner, SwayWorkspaceModule, WarmupModule, WorkspaceSwitcherProvider,
+    InterruptionCostModule, MemoryModule, NetworkModule, NotificationsModule, NoteSearchProvider,
+    PaletteModule, PaletteProvider, RemoteJobsModule, RemoteRunner, RubberDuckConfig,
+    RubberDuckModule, SshMonitorModule, SshRunner, SwayWorkspaceModule, WarmupModule,
+    WorkspaceSwitcherProvider,
 };
 use levshell_sync::{
     AnkiConnectAdapter, AnkiConnectConfig, AnkiConnectConfigWatcher, CalDavAdapter, CalDavConfig,
@@ -191,6 +192,8 @@ async fn main() -> Result<()> {
             let rubber_duck =
                 RubberDuckModule::with_config(publisher.clone(), rubber_duck_config);
 
+            let notifications = NotificationsModule::with_notify_rust(publisher.clone());
+
             // Single shared SshRunner across the three remote modules
             // so ControlMaster TCP connections are reused for every
             // probe regardless of which module issued it.
@@ -216,8 +219,10 @@ async fn main() -> Result<()> {
                     as Box<dyn levshell_core::Module>,
                 Box::new(context_engine) as Box<dyn levshell_core::Module>,
                 Box::new(focus_mode) as Box<dyn levshell_core::Module>,
-                Box::new(CpuModule::new(publisher.clone())) as Box<dyn levshell_core::Module>,
-                Box::new(MemoryModule::new(publisher.clone())) as Box<dyn levshell_core::Module>,
+                Box::new(CpuModule::new(bus.clone(), publisher.clone()))
+                    as Box<dyn levshell_core::Module>,
+                Box::new(MemoryModule::new(bus.clone(), publisher.clone()))
+                    as Box<dyn levshell_core::Module>,
                 Box::new(BatteryModule::new(bus.clone(), publisher.clone()))
                     as Box<dyn levshell_core::Module>,
                 Box::new(NetworkModule::new(publisher)) as Box<dyn levshell_core::Module>,
@@ -225,6 +230,7 @@ async fn main() -> Result<()> {
                 Box::new(ideation) as Box<dyn levshell_core::Module>,
                 Box::new(warmup) as Box<dyn levshell_core::Module>,
                 Box::new(rubber_duck) as Box<dyn levshell_core::Module>,
+                Box::new(notifications) as Box<dyn levshell_core::Module>,
                 Box::new(ssh_monitor) as Box<dyn levshell_core::Module>,
                 Box::new(gpu_dashboard) as Box<dyn levshell_core::Module>,
                 Box::new(remote_jobs) as Box<dyn levshell_core::Module>,

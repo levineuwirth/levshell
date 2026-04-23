@@ -20,9 +20,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use levshell_core::{Event, EventBus, Module, ModuleResult, WidgetDescriptor};
-use levshell_ipc::{
-    CriticalEscalation, DaemonMessage, EscalationLevel, WidgetPublisher, WidgetStatus, WidgetUpdate,
-};
+use levshell_ipc::{DaemonMessage, EscalationLevel, WidgetPublisher, WidgetStatus, WidgetUpdate};
 
 use crate::escalation::EscalationTracker;
 
@@ -210,14 +208,11 @@ impl SshMonitorModule {
             } else {
                 format!("All {} SSH hosts unreachable", state.hosts.len())
             };
-            let msg = DaemonMessage::CriticalEscalation(CriticalEscalation {
+            self.bus.publish(Event::CriticalEscalation {
                 widget_id: SSH_WIDGET_ID.into(),
                 title: "SSH fleet down".into(),
                 body,
             });
-            if let Err(e) = self.publisher.try_send(msg) {
-                tracing::warn!(error = %e, "ssh-monitor: failed to publish CriticalEscalation");
-            }
         }
     }
 

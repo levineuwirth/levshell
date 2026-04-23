@@ -8,9 +8,9 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
-use levshell_core::{Module, ModuleError, ModuleResult, WidgetDescriptor};
+use levshell_core::{Event, EventBus, Module, ModuleError, ModuleResult, WidgetDescriptor};
 use levshell_ipc::{
-    CriticalEscalation, DaemonMessage, EscalationLevel, WidgetPublisher, WidgetStatus, WidgetUpdate,
+    DaemonMessage, EscalationLevel, WidgetPublisher, WidgetStatus, WidgetUpdate,
 };
 use serde::{Deserialize, Serialize};
 
@@ -129,14 +129,16 @@ fn read_load_avg_1() -> Option<f64> {
 }
 
 pub struct CpuModule {
+    bus: EventBus,
     publisher: WidgetPublisher,
     last_sample: Option<CpuSample>,
     escalation: EscalationTracker,
 }
 
 impl CpuModule {
-    pub fn new(publisher: WidgetPublisher) -> Self {
+    pub fn new(bus: EventBus, publisher: WidgetPublisher) -> Self {
         Self {
+            bus,
             publisher,
             last_sample: None,
             escalation: EscalationTracker::new(),
@@ -172,14 +174,11 @@ impl CpuModule {
             tracing::warn!(error = %e, "telemetry-cpu: failed to publish WidgetUpdate");
         }
         if outcome.entered_critical {
-            let msg = DaemonMessage::CriticalEscalation(CriticalEscalation {
+            self.bus.publish(Event::CriticalEscalation {
                 widget_id: CPU_WIDGET_ID.into(),
                 title: "CPU critically high".into(),
                 body: format!("CPU sustained at {:.0}%", state.usage_percent),
             });
-            if let Err(e) = self.publisher.try_send(msg) {
-                tracing::warn!(error = %e, "telemetry-cpu: failed to publish CriticalEscalation");
-            }
         }
     }
 }

@@ -16,8 +16,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use levshell_core::{Event, EventBus, Module, ModuleError, ModuleResult, WidgetDescriptor};
 use levshell_ipc::{
-    CriticalEscalation, DaemonMessage, EscalationLevel, PowerState, WidgetPublisher, WidgetStatus,
-    WidgetUpdate,
+    DaemonMessage, EscalationLevel, PowerState, WidgetPublisher, WidgetStatus, WidgetUpdate,
 };
 
 use crate::escalation::EscalationTracker;
@@ -218,17 +217,11 @@ impl BatteryModule {
             tracing::warn!(error = %e, "telemetry-battery: failed to publish WidgetUpdate");
         }
         if outcome.entered_critical {
-            let msg = DaemonMessage::CriticalEscalation(CriticalEscalation {
+            self.bus.publish(Event::CriticalEscalation {
                 widget_id: BATTERY_WIDGET_ID.into(),
                 title: "Battery critically low".into(),
                 body: format!("Battery at {}%", state.percent),
             });
-            if let Err(e) = self.publisher.try_send(msg) {
-                tracing::warn!(
-                    error = %e,
-                    "telemetry-battery: failed to publish CriticalEscalation"
-                );
-            }
         }
     }
 
