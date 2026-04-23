@@ -9,9 +9,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use levshell_ipc::{
-    BarDensity, CommandPaletteQuery, DaemonMessage, DensityChange, IpcConnection, IpcError,
-    IpcServer, JsonCodec, Prominence, ShellMessage, WidgetAction, WidgetStatus, WidgetUpdate,
-    WidgetVisibility,
+    BarDensity, CommandPaletteQuery, DaemonMessage, DensityChange, EscalationLevel, IpcConnection,
+    IpcError, IpcServer, JsonCodec, Prominence, ShellMessage, WidgetAction, WidgetStatus,
+    WidgetUpdate, WidgetVisibility,
 };
 use serde_json::json;
 use tokio::net::UnixStream;
@@ -74,6 +74,7 @@ async fn round_trip_widget_update_daemon_to_shell() {
         widget_type: "workspace_indicator".into(),
         state: json!({ "active": "research", "all": ["research", "writing"] }),
         status: WidgetStatus::Normal,
+        escalation: EscalationLevel::Ambient,
     });
 
     server_conn.writer().send(&msg).await.unwrap();
@@ -106,6 +107,7 @@ async fn multiple_messages_preserve_framing() {
             widget_type: "workspace_indicator".into(),
             state: json!(1),
             status: WidgetStatus::Normal,
+            escalation: EscalationLevel::Ambient,
         }),
         DaemonMessage::WidgetVisibility(WidgetVisibility {
             widget_id: "ws".into(),
@@ -117,6 +119,7 @@ async fn multiple_messages_preserve_framing() {
             widget_type: "workspace_indicator".into(),
             state: json!("after"),
             status: WidgetStatus::Stale,
+            escalation: EscalationLevel::Ambient,
         }),
     ];
 
@@ -188,12 +191,14 @@ async fn wire_format_is_newline_delimited() {
         widget_type: "t".into(),
         state: json!({ "n": 1 }),
         status: WidgetStatus::Normal,
+        escalation: EscalationLevel::Ambient,
     });
     let msg_b = DaemonMessage::WidgetUpdate(WidgetUpdate {
         widget_id: "b".into(),
         widget_type: "t".into(),
         state: json!({ "n": 2 }),
         status: WidgetStatus::Normal,
+        escalation: EscalationLevel::Ambient,
     });
     server_conn.writer().send(&msg_a).await.unwrap();
     server_conn.writer().send(&msg_b).await.unwrap();
@@ -237,6 +242,7 @@ async fn json_wire_format_uses_type_discriminator() {
         widget_type: "workspace_indicator".into(),
         state: json!({ "name": "research" }),
         status: WidgetStatus::Normal,
+        escalation: EscalationLevel::Ambient,
     });
     let bytes = codec.encode(&msg).unwrap();
     let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();

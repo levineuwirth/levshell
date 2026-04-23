@@ -56,6 +56,14 @@ pub enum DaemonMessage {
     /// the active assistant turn; `done = true` finalizes it. `role`
     /// is `"assistant"` in practice.
     DuckToken(DuckToken),
+    /// A widget crossed into [`EscalationLevel::Critical`]. Per spec
+    /// design §9 rule 3, Critical entry emits a notification as the
+    /// user's escape hatch if they've hidden the widget. Fires once
+    /// on entry; re-entry after a drop to a lower level and return to
+    /// Critical fires again. The in-bar flash is rendered from the
+    /// `escalation` field on [`WidgetUpdate`]; this message is the
+    /// separate out-of-band alert.
+    CriticalEscalation(CriticalEscalation),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -64,6 +72,12 @@ pub struct WidgetUpdate {
     pub widget_type: String,
     pub state: serde_json::Value,
     pub status: WidgetStatus,
+    /// Urgency level per spec design §9. Defaults to
+    /// [`EscalationLevel::Ambient`] so older producers that don't
+    /// compute escalation (and serialized test fixtures) deserialize
+    /// cleanly.
+    #[serde(default)]
+    pub escalation: EscalationLevel,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -74,6 +88,32 @@ pub enum WidgetStatus {
     Stale,
     Error,
     Unavailable,
+}
+
+/// Widget urgency level per spec design §9 "Urgency and Escalation
+/// Grammar". Orthogonal to [`WidgetStatus`]: health state communicates
+/// data freshness, escalation communicates *importance*. Total order
+/// — `Ambient < Aware < Attention < Critical`.
+#[derive(
+    Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum EscalationLevel {
+    #[default]
+    Ambient,
+    Aware,
+    Attention,
+    Critical,
+}
+
+/// Payload for [`DaemonMessage::CriticalEscalation`]. Pre-formatted
+/// title + body so the shell can route the alert without needing to
+/// know widget-specific semantics.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CriticalEscalation {
+    pub widget_id: String,
+    pub title: String,
+    pub body: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -53,6 +53,10 @@ Item {
     // =================================================================
     property string prominence: "visible"
     property string status: "normal"
+    // Urgency level per spec design §9, computed by the daemon's
+    // `EscalationTracker`. One of "ambient" | "aware" | "attention" |
+    // "critical". Default "ambient" renders exactly as pre-§9 widgets.
+    property string escalation: "ambient"
 
     // Default content slot — widgets assign children that get parented
     // to `contentHolder`. This keeps the health chrome (pill + status
@@ -61,12 +65,30 @@ Item {
 
     // =================================================================
     // OUTPUTS — bound by child widgets via `root.contentColor` etc.
+    //
+    // Stacking rule (spec design §10.1): escalation > health state.
+    // When escalation ≥ Attention, the widget renders in the
+    // full-saturation state color regardless of health status — the
+    // user needs to see critical info. Below Attention, we fall back
+    // to the health-state treatment.
     // =================================================================
     readonly property bool degraded: status === "stale" || status === "error"
+    readonly property bool escalated: escalation === "attention" || escalation === "critical"
 
-    readonly property color contentColor: degraded ? Theme.fgMuted : Theme.fg
-    readonly property color accentColor:  degraded ? Theme.outline : Theme.primary
-    readonly property color subtleColor:  degraded ? Theme.fgMuted : Theme.fgSubtle
+    readonly property color contentColor: {
+        if (escalation === "critical")  return Theme.error;
+        if (escalation === "attention") return Theme.warning;
+        return degraded ? Theme.fgMuted : Theme.fg;
+    }
+    readonly property color accentColor: {
+        if (escalation === "critical")  return Theme.error;
+        if (escalation === "attention") return Theme.warning;
+        return degraded ? Theme.outline : Theme.primary;
+    }
+    readonly property color subtleColor: {
+        if (escalated) return contentColor;
+        return degraded ? Theme.fgMuted : Theme.fgSubtle;
+    }
 
     // Target width is content-driven per §5 / §7: the wrapper measures
     // its child content and adds `widgetPaddingH` on each side.
@@ -146,24 +168,81 @@ Item {
     }
 
     // -----------------------------------------------------------------
-    // Left-edge status pill — §7.3 channel 1
+    // Left-edge pill — spec design §9 + §7.3 channel 1.
     //
-    // 2px wide, partial height (title-area aligned — we approximate as
-    // 70% of bar height centered vertically). Shows for stale/error.
+    // Two overlapping visual systems share this slot:
+    //
+    //   • Health pill: muted stalePill/errorPill tokens (§7.3) when
+    //     the widget's data is stale or the module errored.
+    //   • Escalation pill: FULL-saturation warning/error (§9 rule 6)
+    //     when urgency crosses Attention or Critical.
+    //
+    // Per §10.1 stacking, escalation wins when both would apply —
+    // a critical widget with stale data still shows critical red.
     // -----------------------------------------------------------------
     Rectangle {
         id: statusPill
-        visible: root.status === "stale" || root.status === "error"
+        visible: root.escalated || root.status === "stale" || root.status === "error"
         width:   2
         anchors.left: parent.left
         anchors.verticalCenter: parent.verticalCenter
         height:  Math.round(parent.height * 0.7)
-        color: root.status === "stale" ? Theme.stalePill
-             : root.status === "error" ? Theme.errorPill
-             : "transparent"
+        color: {
+            if (root.escalation === "critical")  return Theme.error;
+            if (root.escalation === "attention") return Theme.warning;
+            if (root.status === "stale") return Theme.stalePill;
+            if (root.status === "error") return Theme.errorPill;
+            return "transparent";
+        }
 
         Behavior on color {
             ColorAnimation { duration: Theme.motionNormal }
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // One-time Critical flash — spec design §9 example for Critical.
+    //
+    // A brief full-saturation error pulse overlays the entire widget
+    // on the tick it enters Critical, then settles. Never repeats
+    // while the widget stays at Critical; a drop + re-entry fires
+    // again. Implemented as an opacity envelope on a rectangle that
+    // sits above `contentHolder` but below the status icon.
+    // -----------------------------------------------------------------
+    Rectangle {
+        id: criticalFlash
+        anchors.fill: parent
+        color: Theme.error
+        opacity: 0.0
+        radius: 2
+        visible: opacity > 0.01
+
+        SequentialAnimation {
+            id: flashAnim
+            NumberAnimation {
+                target: criticalFlash
+                property: "opacity"
+                from: 0.0
+                to: 0.45
+                duration: Theme.motionFast
+                easing.type: Easing.OutCubic
+            }
+            NumberAnimation {
+                target: criticalFlash
+                property: "opacity"
+                to: 0.0
+                duration: Theme.motionSlow
+                easing.type: Easing.OutCubic
+            }
+        }
+
+        Connections {
+            target: root
+            function onEscalationChanged() {
+                if (root.escalation === "critical") {
+                    flashAnim.restart();
+                }
+            }
         }
     }
 

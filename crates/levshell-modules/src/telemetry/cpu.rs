@@ -9,13 +9,32 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use levshell_core::{Module, ModuleError, ModuleResult, WidgetDescriptor};
-use levshell_ipc::{DaemonMessage, WidgetPublisher, WidgetStatus, WidgetUpdate};
+use levshell_ipc::{
+    CriticalEscalation, DaemonMessage, EscalationLevel, WidgetPublisher, WidgetStatus, WidgetUpdate,
+};
 use serde::{Deserialize, Serialize};
+
+use crate::escalation::EscalationTracker;
 
 pub const CPU_WIDGET_ID: &str = "cpu";
 pub const CPU_WIDGET_TYPE: &str = "cpu";
 
 const TICK_INTERVAL: Duration = Duration::from_secs(2);
+
+/// Map the latest usage percent to a raw escalation level per spec
+/// design §9 thresholds. The tracker then applies the gradual-rise
+/// rule on top.
+pub fn cpu_raw_escalation(usage_percent: f64) -> EscalationLevel {
+    if usage_percent >= 95.0 {
+        EscalationLevel::Critical
+    } else if usage_percent >= 85.0 {
+        EscalationLevel::Attention
+    } else if usage_percent >= 60.0 {
+        EscalationLevel::Aware
+    } else {
+        EscalationLevel::Ambient
+    }
+}
 
 /// Aggregated jiffies from the first `cpu` line of `/proc/stat`. Each
 /// field is a raw counter; to get a usage percent, call
@@ -112,6 +131,7 @@ fn read_load_avg_1() -> Option<f64> {
 pub struct CpuModule {
     publisher: WidgetPublisher,
     last_sample: Option<CpuSample>,
+    escalation: EscalationTracker,
 }
 
 impl CpuModule {
@@ -119,6 +139,7 @@ impl CpuModule {
         Self {
             publisher,
             last_sample: None,
+            escalation: EscalationTracker::new(),
         }
     }
 
@@ -129,7 +150,7 @@ impl CpuModule {
             .ok_or_else(|| ModuleError::Failed("unrecognizable /proc/stat".into()))
     }
 
-    fn publish(&self, state: CpuState) {
+    fn publish(&mut self, state: CpuState) {
         let value = match serde_json::to_value(&state) {
             Ok(v) => v,
             Err(e) => {
@@ -137,14 +158,28 @@ impl CpuModule {
                 return;
             }
         };
+        let outcome = self
+            .escalation
+            .step(cpu_raw_escalation(state.usage_percent));
         let update = WidgetUpdate {
             widget_id: CPU_WIDGET_ID.into(),
             widget_type: CPU_WIDGET_TYPE.into(),
             state: value,
             status: WidgetStatus::Normal,
+            escalation: outcome.level,
         };
         if let Err(e) = self.publisher.try_send(DaemonMessage::WidgetUpdate(update)) {
             tracing::warn!(error = %e, "telemetry-cpu: failed to publish WidgetUpdate");
+        }
+        if outcome.entered_critical {
+            let msg = DaemonMessage::CriticalEscalation(CriticalEscalation {
+                widget_id: CPU_WIDGET_ID.into(),
+                title: "CPU critically high".into(),
+                body: format!("CPU sustained at {:.0}%", state.usage_percent),
+            });
+            if let Err(e) = self.publisher.try_send(msg) {
+                tracing::warn!(error = %e, "telemetry-cpu: failed to publish CriticalEscalation");
+            }
         }
     }
 }
@@ -291,6 +326,18 @@ mod tests {
         };
         let u = curr.usage_percent(&prev);
         assert!((u - 25.0).abs() < 0.001, "expected ~25%, got {u}");
+    }
+
+    #[test]
+    fn raw_escalation_thresholds_match_spec() {
+        assert_eq!(cpu_raw_escalation(0.0), EscalationLevel::Ambient);
+        assert_eq!(cpu_raw_escalation(59.9), EscalationLevel::Ambient);
+        assert_eq!(cpu_raw_escalation(60.0), EscalationLevel::Aware);
+        assert_eq!(cpu_raw_escalation(84.9), EscalationLevel::Aware);
+        assert_eq!(cpu_raw_escalation(85.0), EscalationLevel::Attention);
+        assert_eq!(cpu_raw_escalation(94.9), EscalationLevel::Attention);
+        assert_eq!(cpu_raw_escalation(95.0), EscalationLevel::Critical);
+        assert_eq!(cpu_raw_escalation(100.0), EscalationLevel::Critical);
     }
 
     #[test]

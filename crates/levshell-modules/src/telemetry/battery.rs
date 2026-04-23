@@ -15,7 +15,35 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use levshell_core::{Event, EventBus, Module, ModuleError, ModuleResult, WidgetDescriptor};
-use levshell_ipc::{DaemonMessage, PowerState, WidgetPublisher, WidgetStatus, WidgetUpdate};
+use levshell_ipc::{
+    CriticalEscalation, DaemonMessage, EscalationLevel, PowerState, WidgetPublisher, WidgetStatus,
+    WidgetUpdate,
+};
+
+use crate::escalation::EscalationTracker;
+
+/// Battery escalation only trips while *discharging* — spec example
+/// "battery at 3%" implies the user is on battery power. A charging
+/// pack at 3% is Ambient because it's actively recovering.
+///
+/// Thresholds loosely mirror the §9 examples:
+/// * Aware at ≤30% (the spec's "battery drops below 30%" Aware case),
+/// * Attention at ≤15%,
+/// * Critical at <5% (spec's "battery at 3%").
+pub fn battery_raw_escalation(percent: u8, on_battery: bool) -> EscalationLevel {
+    if !on_battery {
+        return EscalationLevel::Ambient;
+    }
+    if percent < 5 {
+        EscalationLevel::Critical
+    } else if percent <= 15 {
+        EscalationLevel::Attention
+    } else if percent <= 30 {
+        EscalationLevel::Aware
+    } else {
+        EscalationLevel::Ambient
+    }
+}
 use serde::{Deserialize, Serialize};
 
 pub const BATTERY_WIDGET_ID: &str = "battery";
@@ -145,6 +173,7 @@ pub struct BatteryModule {
     power_supply_dir: PathBuf,
     battery_dir: Option<PathBuf>,
     last_on_battery: Option<bool>,
+    escalation: EscalationTracker,
 }
 
 impl BatteryModule {
@@ -155,6 +184,7 @@ impl BatteryModule {
             power_supply_dir: PathBuf::from(DEFAULT_POWER_SUPPLY_DIR),
             battery_dir: None,
             last_on_battery: None,
+            escalation: EscalationTracker::new(),
         }
     }
 
@@ -166,7 +196,7 @@ impl BatteryModule {
         self
     }
 
-    fn publish(&self, state: &BatteryState) {
+    fn publish(&mut self, state: &BatteryState) {
         let value = match serde_json::to_value(state) {
             Ok(v) => v,
             Err(e) => {
@@ -174,14 +204,31 @@ impl BatteryModule {
                 return;
             }
         };
+        let outcome = self
+            .escalation
+            .step(battery_raw_escalation(state.percent, state.on_battery));
         let update = WidgetUpdate {
             widget_id: BATTERY_WIDGET_ID.into(),
             widget_type: BATTERY_WIDGET_TYPE.into(),
             state: value,
             status: WidgetStatus::Normal,
+            escalation: outcome.level,
         };
         if let Err(e) = self.publisher.try_send(DaemonMessage::WidgetUpdate(update)) {
             tracing::warn!(error = %e, "telemetry-battery: failed to publish WidgetUpdate");
+        }
+        if outcome.entered_critical {
+            let msg = DaemonMessage::CriticalEscalation(CriticalEscalation {
+                widget_id: BATTERY_WIDGET_ID.into(),
+                title: "Battery critically low".into(),
+                body: format!("Battery at {}%", state.percent),
+            });
+            if let Err(e) = self.publisher.try_send(msg) {
+                tracing::warn!(
+                    error = %e,
+                    "telemetry-battery: failed to publish CriticalEscalation"
+                );
+            }
         }
     }
 
@@ -277,6 +324,28 @@ mod tests {
             BatteryStatus::NotCharging
         );
         assert_eq!(BatteryStatus::parse("bogus"), BatteryStatus::Unknown);
+    }
+
+    #[test]
+    fn raw_escalation_is_ambient_while_charging_even_at_low_percent() {
+        assert_eq!(
+            battery_raw_escalation(3, false),
+            EscalationLevel::Ambient,
+            "charging battery at 3% must not escalate"
+        );
+        assert_eq!(battery_raw_escalation(25, false), EscalationLevel::Ambient);
+    }
+
+    #[test]
+    fn raw_escalation_thresholds_match_spec_while_on_battery() {
+        assert_eq!(battery_raw_escalation(100, true), EscalationLevel::Ambient);
+        assert_eq!(battery_raw_escalation(31, true), EscalationLevel::Ambient);
+        assert_eq!(battery_raw_escalation(30, true), EscalationLevel::Aware);
+        assert_eq!(battery_raw_escalation(16, true), EscalationLevel::Aware);
+        assert_eq!(battery_raw_escalation(15, true), EscalationLevel::Attention);
+        assert_eq!(battery_raw_escalation(5, true), EscalationLevel::Attention);
+        assert_eq!(battery_raw_escalation(4, true), EscalationLevel::Critical);
+        assert_eq!(battery_raw_escalation(0, true), EscalationLevel::Critical);
     }
 
     #[test]

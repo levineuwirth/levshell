@@ -26,9 +26,10 @@ pub use handshake::{
 };
 pub use messages::{
     BarDensity, BarDensityState, BarLayout, CommandPaletteQuery, CommandPaletteSelect,
-    DaemonMessage, DensityChange, DuckSay, DuckToken, PowerState, Prominence, ShellMessage,
-    ThemeBar, ThemeColors, ThemeHealth, ThemeIcons, ThemePayload, ThemeTypography, WarmupEvent,
-    WarmupPayload, WarmupProject, WidgetAction, WidgetStatus, WidgetUpdate, WidgetVisibility,
+    CriticalEscalation, DaemonMessage, DensityChange, DuckSay, DuckToken, EscalationLevel,
+    PowerState, Prominence, ShellMessage, ThemeBar, ThemeColors, ThemeHealth, ThemeIcons,
+    ThemePayload, ThemeTypography, WarmupEvent, WarmupPayload, WarmupProject, WidgetAction,
+    WidgetStatus, WidgetUpdate, WidgetVisibility,
 };
 pub use publisher::{spawn_writer_task, WidgetPublisher, WriterTask};
 pub use server::{default_socket_path, IpcConnection, IpcReader, IpcServer, IpcWriter};

@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use levshell_ipc::{
-    spawn_writer_task, DaemonMessage, IpcConnection, IpcServer, JsonCodec, WidgetStatus,
-    WidgetUpdate,
+    spawn_writer_task, DaemonMessage, EscalationLevel, IpcConnection, IpcServer, JsonCodec,
+    WidgetStatus, WidgetUpdate,
 };
 use serde_json::json;
 use tokio::net::UnixStream;
@@ -37,6 +37,7 @@ async fn publisher_routes_messages_through_writer_task() {
         widget_type: "workspace_indicator".into(),
         state: json!({ "active": "research" }),
         status: WidgetStatus::Normal,
+        escalation: EscalationLevel::Ambient,
     });
     task.publisher.send(msg.clone()).await.unwrap();
 
@@ -77,6 +78,7 @@ async fn closed_signal_fires_when_peer_disappears() {
             widget_type: "x".into(),
             state: serde_json::Value::Null,
             status: WidgetStatus::Normal,
+            escalation: EscalationLevel::Ambient,
         }))
         .await;
 

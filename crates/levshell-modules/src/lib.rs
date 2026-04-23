@@ -12,6 +12,7 @@
 
 pub mod context_engine;
 pub mod context_snapshot;
+pub mod escalation;
 pub mod focus;
 pub mod rubber_duck;
 pub mod ideation;
@@ -28,6 +29,7 @@ pub use context_snapshot::{
     default_contexts_dir, delete_snapshot, list_snapshots, restore_snapshot, save_current,
     ContextSnapshot, ContextSnapshotError, OperationSummary, WindowSnapshot,
 };
+pub use escalation::{EscalationTracker, TickOutcome};
 pub use focus::{FocusModeModule, FocusModeTracker, TriggerAction, TriggerInput, TriggerPhase};
 pub use rubber_duck::{
     default_rubber_duck_config_path, RubberDuckConfig, RubberDuckConfigError, RubberDuckModule,

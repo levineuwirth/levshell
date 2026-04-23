@@ -116,6 +116,7 @@ Scope {
     // would not.
     property var widgetStates: ({})
     property var widgetStatuses: ({})
+    property var widgetEscalations: ({})
     property var widgetVisibility: ({})
     property var barLayout: ({ left: [], center: [], right: [] })
     // Command-palette overlay state, driven by the `command-palette`
@@ -170,6 +171,10 @@ Scope {
             const st = Object.assign({}, shell.widgetStatuses);
             st[id] = msg.status || "normal";
             shell.widgetStatuses = st;
+
+            const esc = Object.assign({}, shell.widgetEscalations);
+            esc[id] = msg.escalation || "ambient";
+            shell.widgetEscalations = esc;
             break;
         }
         case "widget_visibility": {
@@ -226,6 +231,17 @@ Scope {
         }
         case "duck_token": {
             shell.appendDuckToken(msg);
+            break;
+        }
+        case "critical_escalation": {
+            // Spec design §9 rule 3: a widget crossed into Critical.
+            // The in-bar red pill + one-time flash is already rendered
+            // from the escalation field on `widget_update`; this
+            // separate channel is the user's escape hatch when the
+            // widget is hidden. For now we log — a future phase will
+            // hand it off to an OS notification bridge.
+            console.warn("levshell: critical escalation",
+                         msg.widget_id, "—", msg.title, ":", msg.body);
             break;
         }
         default:
@@ -323,6 +339,10 @@ Scope {
         return shell.widgetStatuses[widgetId] || "normal";
     }
 
+    function escalationFor(widgetId) {
+        return shell.widgetEscalations[widgetId] || "ambient";
+    }
+
     function stateFor(widgetId) {
         return shell.widgetStates[widgetId] || null;
     }
@@ -405,6 +425,7 @@ Scope {
                             item.widgetState = Qt.binding(() => shell.stateFor(modelData));
                             item.status = Qt.binding(() => shell.statusFor(modelData));
                             item.prominence = Qt.binding(() => shell.prominenceFor(modelData));
+                            item.escalation = Qt.binding(() => shell.escalationFor(modelData));
                         }
                     }
                 }
@@ -427,6 +448,7 @@ Scope {
                             item.widgetState = Qt.binding(() => shell.stateFor(modelData));
                             item.status = Qt.binding(() => shell.statusFor(modelData));
                             item.prominence = Qt.binding(() => shell.prominenceFor(modelData));
+                            item.escalation = Qt.binding(() => shell.escalationFor(modelData));
                         }
                     }
                 }
@@ -450,6 +472,7 @@ Scope {
                             item.widgetState = Qt.binding(() => shell.stateFor(modelData));
                             item.status = Qt.binding(() => shell.statusFor(modelData));
                             item.prominence = Qt.binding(() => shell.prominenceFor(modelData));
+                            item.escalation = Qt.binding(() => shell.escalationFor(modelData));
                         }
                     }
                 }

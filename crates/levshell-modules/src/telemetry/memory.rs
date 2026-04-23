@@ -11,13 +11,31 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use levshell_core::{Module, ModuleError, ModuleResult, WidgetDescriptor};
-use levshell_ipc::{DaemonMessage, WidgetPublisher, WidgetStatus, WidgetUpdate};
+use levshell_ipc::{
+    CriticalEscalation, DaemonMessage, EscalationLevel, WidgetPublisher, WidgetStatus, WidgetUpdate,
+};
 use serde::{Deserialize, Serialize};
+
+use crate::escalation::EscalationTracker;
 
 pub const MEMORY_WIDGET_ID: &str = "memory";
 pub const MEMORY_WIDGET_TYPE: &str = "memory";
 
 const TICK_INTERVAL: Duration = Duration::from_secs(2);
+
+/// Same thresholds as CPU — headroom is a finite resource and 95% used
+/// memory is a pre-OOM warning.
+pub fn memory_raw_escalation(used_percent: f64) -> EscalationLevel {
+    if used_percent >= 95.0 {
+        EscalationLevel::Critical
+    } else if used_percent >= 85.0 {
+        EscalationLevel::Attention
+    } else if used_percent >= 60.0 {
+        EscalationLevel::Aware
+    } else {
+        EscalationLevel::Ambient
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MemoryState {
@@ -72,11 +90,15 @@ impl MemoryState {
 
 pub struct MemoryModule {
     publisher: WidgetPublisher,
+    escalation: EscalationTracker,
 }
 
 impl MemoryModule {
     pub fn new(publisher: WidgetPublisher) -> Self {
-        Self { publisher }
+        Self {
+            publisher,
+            escalation: EscalationTracker::new(),
+        }
     }
 
     fn read_state() -> ModuleResult<MemoryState> {
@@ -86,7 +108,7 @@ impl MemoryModule {
             .ok_or_else(|| ModuleError::Failed("unrecognizable /proc/meminfo".into()))
     }
 
-    fn publish(&self, state: MemoryState) {
+    fn publish(&mut self, state: MemoryState) {
         let value = match serde_json::to_value(&state) {
             Ok(v) => v,
             Err(e) => {
@@ -94,14 +116,28 @@ impl MemoryModule {
                 return;
             }
         };
+        let outcome = self
+            .escalation
+            .step(memory_raw_escalation(state.used_percent));
         let update = WidgetUpdate {
             widget_id: MEMORY_WIDGET_ID.into(),
             widget_type: MEMORY_WIDGET_TYPE.into(),
             state: value,
             status: WidgetStatus::Normal,
+            escalation: outcome.level,
         };
         if let Err(e) = self.publisher.try_send(DaemonMessage::WidgetUpdate(update)) {
             tracing::warn!(error = %e, "telemetry-memory: failed to publish WidgetUpdate");
+        }
+        if outcome.entered_critical {
+            let msg = DaemonMessage::CriticalEscalation(CriticalEscalation {
+                widget_id: MEMORY_WIDGET_ID.into(),
+                title: "Memory critically high".into(),
+                body: format!("Memory at {:.0}%", state.used_percent),
+            });
+            if let Err(e) = self.publisher.try_send(msg) {
+                tracing::warn!(error = %e, "telemetry-memory: failed to publish CriticalEscalation");
+            }
         }
     }
 }
@@ -166,6 +202,18 @@ Cached:          5000000 kB
     #[test]
     fn returns_none_on_garbage() {
         assert!(MemoryState::parse_proc_meminfo("not meminfo").is_none());
+    }
+
+    #[test]
+    fn raw_escalation_thresholds_match_spec() {
+        assert_eq!(memory_raw_escalation(0.0), EscalationLevel::Ambient);
+        assert_eq!(memory_raw_escalation(59.9), EscalationLevel::Ambient);
+        assert_eq!(memory_raw_escalation(60.0), EscalationLevel::Aware);
+        assert_eq!(memory_raw_escalation(84.9), EscalationLevel::Aware);
+        assert_eq!(memory_raw_escalation(85.0), EscalationLevel::Attention);
+        assert_eq!(memory_raw_escalation(94.9), EscalationLevel::Attention);
+        assert_eq!(memory_raw_escalation(95.0), EscalationLevel::Critical);
+        assert_eq!(memory_raw_escalation(100.0), EscalationLevel::Critical);
     }
 
     #[test]

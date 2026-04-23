@@ -20,7 +20,30 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use levshell_core::{Event, EventBus, Module, ModuleResult, WidgetDescriptor};
-use levshell_ipc::{DaemonMessage, WidgetPublisher, WidgetStatus, WidgetUpdate};
+use levshell_ipc::{
+    CriticalEscalation, DaemonMessage, EscalationLevel, WidgetPublisher, WidgetStatus, WidgetUpdate,
+};
+
+use crate::escalation::EscalationTracker;
+
+/// Derive a raw escalation level from the published fleet state.
+/// `Ambient` when every host is reachable; `Attention` once any host
+/// drops; `Critical` only on a fleet-wide outage (all hosts down —
+/// spec's "SSH tunnel died during active use" stand-in, since a
+/// single-host fleet's sole host going dark is effectively that).
+pub fn ssh_raw_escalation(state: &SshFleetState) -> EscalationLevel {
+    if state.hosts.is_empty() {
+        return EscalationLevel::Ambient;
+    }
+    let down = state.hosts.iter().filter(|h| !h.reachable).count();
+    if down == 0 {
+        EscalationLevel::Ambient
+    } else if down == state.hosts.len() {
+        EscalationLevel::Critical
+    } else {
+        EscalationLevel::Attention
+    }
+}
 use serde::{Deserialize, Serialize};
 
 use super::host::{HostConfig, HostRegistry, HostRole};
@@ -67,6 +90,7 @@ pub struct SshMonitorModule {
     /// so we only publish `SshHostStatus` on transitions.
     last_reachable: HashMap<String, bool>,
     poll_interval: Duration,
+    escalation: EscalationTracker,
 }
 
 impl SshMonitorModule {
@@ -83,6 +107,7 @@ impl SshMonitorModule {
             bus,
             last_reachable: HashMap::new(),
             poll_interval: DEFAULT_POLL_INTERVAL,
+            escalation: EscalationTracker::new(),
         }
     }
 
@@ -155,7 +180,7 @@ impl SshMonitorModule {
         }
     }
 
-    fn publish_widget(&self, state: &SshFleetState) {
+    fn publish_widget(&mut self, state: &SshFleetState) {
         let value = match serde_json::to_value(state) {
             Ok(v) => v,
             Err(e) => {
@@ -168,14 +193,31 @@ impl SshMonitorModule {
         } else {
             WidgetStatus::Normal
         };
+        let outcome = self.escalation.step(ssh_raw_escalation(state));
         let update = WidgetUpdate {
             widget_id: SSH_WIDGET_ID.into(),
             widget_type: SSH_WIDGET_TYPE.into(),
             state: value,
             status: widget_status,
+            escalation: outcome.level,
         };
         if let Err(e) = self.publisher.try_send(DaemonMessage::WidgetUpdate(update)) {
             tracing::warn!(error = %e, "ssh-monitor: failed to publish WidgetUpdate");
+        }
+        if outcome.entered_critical {
+            let body = if state.hosts.len() == 1 {
+                format!("SSH host {} unreachable", state.hosts[0].display_name)
+            } else {
+                format!("All {} SSH hosts unreachable", state.hosts.len())
+            };
+            let msg = DaemonMessage::CriticalEscalation(CriticalEscalation {
+                widget_id: SSH_WIDGET_ID.into(),
+                title: "SSH fleet down".into(),
+                body,
+            });
+            if let Err(e) = self.publisher.try_send(msg) {
+                tracing::warn!(error = %e, "ssh-monitor: failed to publish CriticalEscalation");
+            }
         }
     }
 
@@ -266,6 +308,60 @@ mod tests {
         let (a, _b) = duplex(4096);
         let w = IpcWriter::from_parts(a, JsonCodec);
         spawn_writer_task(w, 16)
+    }
+
+    fn fleet_state(reachability: &[bool]) -> SshFleetState {
+        SshFleetState {
+            hosts: reachability
+                .iter()
+                .enumerate()
+                .map(|(i, r)| SshHostState {
+                    name: format!("h{i}"),
+                    display_name: format!("host-{i}"),
+                    project: None,
+                    reachable: *r,
+                    latency_ms: if *r { Some(50) } else { None },
+                    status: if *r { "healthy".into() } else { "offline".into() },
+                    error: None,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn raw_escalation_empty_is_ambient() {
+        assert_eq!(
+            ssh_raw_escalation(&SshFleetState { hosts: vec![] }),
+            EscalationLevel::Ambient
+        );
+    }
+
+    #[test]
+    fn raw_escalation_all_reachable_is_ambient() {
+        assert_eq!(
+            ssh_raw_escalation(&fleet_state(&[true, true, true])),
+            EscalationLevel::Ambient
+        );
+    }
+
+    #[test]
+    fn raw_escalation_partial_outage_is_attention() {
+        assert_eq!(
+            ssh_raw_escalation(&fleet_state(&[true, false])),
+            EscalationLevel::Attention
+        );
+    }
+
+    #[test]
+    fn raw_escalation_full_outage_is_critical() {
+        assert_eq!(
+            ssh_raw_escalation(&fleet_state(&[false, false])),
+            EscalationLevel::Critical
+        );
+        assert_eq!(
+            ssh_raw_escalation(&fleet_state(&[false])),
+            EscalationLevel::Critical
+        );
     }
 
     #[tokio::test]

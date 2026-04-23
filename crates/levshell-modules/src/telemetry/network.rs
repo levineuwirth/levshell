@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use levshell_core::{Module, ModuleError, ModuleResult, WidgetDescriptor};
-use levshell_ipc::{DaemonMessage, WidgetPublisher, WidgetStatus, WidgetUpdate};
+use levshell_ipc::{DaemonMessage, EscalationLevel, WidgetPublisher, WidgetStatus, WidgetUpdate};
 use serde::{Deserialize, Serialize};
 
 pub const NETWORK_WIDGET_ID: &str = "network";
@@ -148,6 +148,7 @@ impl NetworkModule {
             widget_type: NETWORK_WIDGET_TYPE.into(),
             state: value,
             status: WidgetStatus::Normal,
+            escalation: EscalationLevel::Ambient,
         };
         if let Err(e) = self.publisher.try_send(DaemonMessage::WidgetUpdate(update)) {
             tracing::warn!(error = %e, "telemetry-network: failed to publish WidgetUpdate");

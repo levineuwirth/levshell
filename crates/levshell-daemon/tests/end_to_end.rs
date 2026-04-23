@@ -20,8 +20,9 @@ use levshell_daemon::{run, run_with_sync, DaemonConfig, ModuleFactory, SyncAdapt
 use levshell_data::{DataStore, ListNotes};
 use levshell_sync::{ObsidianAdapter, ObsidianConfig, SyncAdapter};
 use levshell_ipc::{
-    BarDensity, ClientRole, CtlRequest, CtlResponse, DaemonMessage, Hello, IpcConnection,
-    JsonCodec, ShellMessage, WidgetAction, WidgetPublisher, WidgetStatus, WidgetUpdate,
+    BarDensity, ClientRole, CtlRequest, CtlResponse, DaemonMessage, EscalationLevel, Hello,
+    IpcConnection, JsonCodec, ShellMessage, WidgetAction, WidgetPublisher, WidgetStatus,
+    WidgetUpdate,
 };
 use levshell_modules::{
     default_context_engine, default_widgets, MemoryModule, PaletteModule, PaletteProvider,
@@ -102,6 +103,7 @@ impl Module for FakeModule {
                 "focused_window": null
             }),
             status: WidgetStatus::Normal,
+            escalation: EscalationLevel::Ambient,
         });
         self.publisher
             .send(msg)

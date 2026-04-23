@@ -7,7 +7,7 @@
 //! lets the production [`super::module::SwayWorkspaceModule`] do nothing
 //! more than translate `swayipc_async::Workspace` into our shape.
 
-use levshell_ipc::{WidgetStatus, WidgetUpdate};
+use levshell_ipc::{EscalationLevel, WidgetStatus, WidgetUpdate};
 use serde::{Deserialize, Serialize};
 
 /// The widget id and type the indicator is published under. Both the daemon
@@ -61,6 +61,7 @@ impl WorkspaceIndicatorState {
             widget_type: WORKSPACE_WIDGET_TYPE.into(),
             state,
             status,
+            escalation: EscalationLevel::Ambient,
         }
     }
 }

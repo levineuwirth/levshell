@@ -36,7 +36,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use chrono::Utc;
 use levshell_core::{Event, EventKind, Module, ModuleResult, WidgetDescriptor};
-use levshell_ipc::{DaemonMessage, WidgetPublisher, WidgetStatus, WidgetUpdate};
+use levshell_ipc::{DaemonMessage, EscalationLevel, WidgetPublisher, WidgetStatus, WidgetUpdate};
 use serde::{Deserialize, Serialize};
 
 pub const MODULE_NAME: &str = "interruption-cost";
@@ -157,6 +157,7 @@ impl InterruptionCostModule {
             widget_type: WIDGET_TYPE.to_owned(),
             state: serde_json::to_value(&state).unwrap_or(serde_json::Value::Null),
             status: WidgetStatus::Normal,
+            escalation: EscalationLevel::Ambient,
         });
         if let Err(e) = self.publisher.try_send(msg) {
             tracing::warn!(error = %e, "interruption-cost: widget update drop");

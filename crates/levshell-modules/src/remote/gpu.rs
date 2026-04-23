@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use levshell_core::{Module, ModuleResult, WidgetDescriptor};
-use levshell_ipc::{DaemonMessage, WidgetPublisher, WidgetStatus, WidgetUpdate};
+use levshell_ipc::{DaemonMessage, EscalationLevel, WidgetPublisher, WidgetStatus, WidgetUpdate};
 use serde::{Deserialize, Serialize};
 
 use super::host::{HostConfig, HostRegistry, HostRole};
@@ -212,6 +212,7 @@ impl GpuDashboardModule {
             widget_type: GPU_WIDGET_TYPE.into(),
             state: value,
             status: widget_status,
+            escalation: EscalationLevel::Ambient,
         };
         if let Err(e) = self.publisher.try_send(DaemonMessage::WidgetUpdate(update)) {
             tracing::warn!(error = %e, "gpu-dashboard: failed to publish WidgetUpdate");

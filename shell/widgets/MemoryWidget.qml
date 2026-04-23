@@ -20,13 +20,6 @@ WidgetWrapper {
     readonly property real totalGb: ((widgetState && widgetState.total_kb) || 0) / 1024.0 / 1024.0
     readonly property real usedGb: ((widgetState && widgetState.used_kb) || 0) / 1024.0 / 1024.0
 
-    readonly property color usageColor: {
-        if (root.degraded) return root.contentColor;
-        if (usedPercent > 90) return Theme.error;
-        if (usedPercent > 75) return Theme.warning;
-        return root.contentColor;
-    }
-
     Row {
         anchors.verticalCenter: parent.verticalCenter
         anchors.left: parent.left
@@ -35,7 +28,7 @@ WidgetWrapper {
         Text {
             anchors.verticalCenter: parent.verticalCenter
             text: Theme.iconMemory
-            color: root.usageColor
+            color: root.contentColor
             font.family:    Theme.fontIcon
             font.pixelSize: Theme.iconSize
         }
@@ -43,7 +36,7 @@ WidgetWrapper {
         Text {
             anchors.verticalCenter: parent.verticalCenter
             text: Math.round(root.usedPercent) + "%"
-            color: root.usageColor
+            color: root.contentColor
             font.family: Theme.fontMono
             font.pixelSize: Theme.typeLabel
             font.weight: Theme.typeBodyEmphasisWeight

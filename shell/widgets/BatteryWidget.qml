@@ -23,10 +23,9 @@ WidgetWrapper {
     readonly property bool full: batteryStatus === "full"
 
     readonly property color batteryColor: {
-        if (root.degraded) return root.contentColor;
-        if (charging) return Theme.primary;
-        if (percent <= 10) return Theme.error;
-        if (percent <= 25) return Theme.warning;
+        if (root.escalated) return root.contentColor;
+        if (root.degraded)  return root.contentColor;
+        if (charging)       return Theme.primary;
         return root.contentColor;
     }
 

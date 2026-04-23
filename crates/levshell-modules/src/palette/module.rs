@@ -18,7 +18,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures_util::future::join_all;
 use levshell_core::{Event, EventKind, Module, ModuleResult, WidgetDescriptor};
-use levshell_ipc::{DaemonMessage, WidgetPublisher, WidgetStatus, WidgetUpdate};
+use levshell_ipc::{DaemonMessage, EscalationLevel, WidgetPublisher, WidgetStatus, WidgetUpdate};
 
 use super::provider::{merge_results, PaletteItem, PaletteProvider, PaletteState};
 
@@ -71,6 +71,7 @@ impl PaletteModule {
             widget_type: PALETTE_WIDGET_TYPE.into(),
             state: value,
             status: WidgetStatus::Normal,
+            escalation: EscalationLevel::Ambient,
         };
         if let Err(e) = self.publisher.try_send(DaemonMessage::WidgetUpdate(update)) {
             tracing::warn!(error = %e, "palette: failed to publish WidgetUpdate");
