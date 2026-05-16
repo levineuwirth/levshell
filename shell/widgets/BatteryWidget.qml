@@ -51,9 +51,22 @@ WidgetWrapper {
     }
 
     MouseArea {
+        id: clickArea
         anchors.fill: parent
         z: 10
+        hoverEnabled: true
+        cursorShape: Qt.PointingHandCursor
         onClicked: shell.toggleQuickSettings()
+    }
+
+    // Faint hover wash so the click affordance isn't pure-cursor-only.
+    Rectangle {
+        anchors.fill: parent
+        radius: 4
+        color: Theme.fg
+        opacity: clickArea.containsMouse ? 0.06 : 0.0
+        z: -1
+        Behavior on opacity { NumberAnimation { duration: Theme.motionFast } }
     }
 
     Row {

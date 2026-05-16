@@ -32,16 +32,18 @@ Rectangle {
     // =================================================================
     // NOTIFICATION GROUPING
     //
-    // trackedNotifications is a flat model ordered by arrival. We
-    // re-sort into app-contiguous buckets for ListView.section, same
-    // pattern as CommandPalette's groupedPayload.
+    // trackedNotifications is a Quickshell UntypedObjectModel: iterate
+    // via `values` (QObjectList exposed as a JS array). It has no `count`
+    // property — using one silently reads `undefined` and the loop never
+    // executes.
     // =================================================================
     readonly property var groupedPayload: {
         if (!notifModel) return { items: [], appCount: 0 };
         const byApp = {};
         const order = [];
-        for (let i = 0; i < notifModel.count; i++) {
-            const n = notifModel.values[i];
+        const items = notifModel.values || [];
+        for (let i = 0; i < items.length; i++) {
+            const n = items[i];
             if (!n) continue;
             const app = n.appName || "Unknown";
             if (!byApp[app]) {
@@ -112,7 +114,7 @@ Rectangle {
         Math.floor(Screen.height * 0.5)
     )
 
-    implicitWidth: 380
+    implicitWidth: 460
     implicitHeight: {
         const content = headerHeight + Theme.spaceMd
                       + displayedNotifs.length * entryMinHeight
@@ -124,8 +126,8 @@ Rectangle {
     }
 
     color: Qt.rgba(Theme.surface.r, Theme.surface.g, Theme.surface.b,
-                   Theme.onBattery ? Theme.barOpacityBattery
-                                   : Theme.barOpacity)
+                   Theme.onBattery ? Theme.panelOpacityBattery
+                                   : Theme.panelOpacity)
     Behavior on color {
         ColorAnimation { duration: Theme.motionNormal }
     }
@@ -212,11 +214,12 @@ Rectangle {
         // -------------------------------------------------------------
         // Header: title + DnD toggle
         // -------------------------------------------------------------
-        Row {
+        Item {
             width: parent.width
             height: root.headerHeight
 
             Text {
+                anchors.left: parent.left
                 anchors.verticalCenter: parent.verticalCenter
                 text: "Notifications"
                 color: Theme.fg
@@ -224,8 +227,6 @@ Rectangle {
                 font.pixelSize: Theme.typeTitle
                 font.weight: Theme.typeTitleWeight
             }
-
-            Item { width: 1; Layout.fillWidth: true; height: 1 }
 
             // DnD toggle — right-aligned pill button.
             Rectangle {

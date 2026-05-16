@@ -123,18 +123,18 @@ Rectangle {
                                       + 2 * Theme.panelInnerPadding
                                       + Theme.spaceMd
 
-    implicitWidth: 560
+    implicitWidth: 640
     implicitHeight: {
         const rowsHeight = displayedResults.length * resultRowHeight;
         const sectionsHeight = sectionCount * sectionHeaderHeight;
         const contentHeight = chromeHeight + rowsHeight + sectionsHeight;
         return Math.min(maxCardHeight, Math.max(chromeHeight + resultRowHeight, contentHeight));
     }
-    // §12.1 + §3.1.3: overlay panels use `surface` at bar.opacity
-    // with backdrop blur, falling back to opaque on battery.
+    // §12.1 + §3.1.3: overlay panels use `surface` at panel.opacity
+    // with backdrop blur, falling back to near-opaque on battery.
     color: Qt.rgba(Theme.surface.r, Theme.surface.g, Theme.surface.b,
-                   Theme.onBattery ? Theme.barOpacityBattery
-                                   : Theme.barOpacity)
+                   Theme.onBattery ? Theme.panelOpacityBattery
+                                   : Theme.panelOpacity)
     Behavior on color {
         ColorAnimation { duration: Theme.motionNormal }
     }

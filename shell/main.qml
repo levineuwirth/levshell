@@ -73,6 +73,12 @@ Scope {
         persistenceSupported: true
 
         onNotification: (notification) => {
+            // Visible confirmation in the quickshell log that the bus
+            // claim succeeded — if `notify-send` produces no output here,
+            // another daemon (dunst/mako/swaync) holds
+            // org.freedesktop.Notifications.
+            console.log("levshell: notif", notification.appName, "—",
+                        notification.summary);
             notification.tracked = true;
             shell.notifArrivalTimes[notification.id] = Date.now();
             shell.notifArrivalTimes = shell.notifArrivalTimes; // trigger change

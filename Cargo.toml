@@ -72,6 +72,11 @@ icalendar = "0.17"
 # build.
 notify-rust = { version = "4", default-features = false, features = ["z"] }
 
+# UPower D-Bus subscription for instant AC-state changes (bypassing the
+# 10s battery sysfs poll). Pinned to the version notify-rust transitively
+# pulls in so we share a single zbus runtime.
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+
 # Internal crates (referenced by path so each crate inherits the workspace version)
 levshell-core    = { path = "crates/levshell-core",    version = "0.1.0" }
 levshell-data    = { path = "crates/levshell-data",    version = "0.1.0" }

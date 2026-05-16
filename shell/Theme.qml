@@ -157,6 +157,14 @@ QtObject {
     property int  barBlurRadius:          30
     property int  barBlurRadiusBattery:   0
 
+    // Dropdown panels (palette / notification center / quick settings /
+    // clock hub) sit slightly more transparent than the bar so the
+    // wallpaper still reads through them. `panelOpacityBattery` keeps
+    // a touch of blur even on opaque-mode systems for legibility on
+    // bright wallpapers.
+    property real panelOpacity:        0.72
+    property real panelOpacityBattery: 0.96
+
     property bool onBattery: false
 
     // =================================================================

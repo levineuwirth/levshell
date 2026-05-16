@@ -7,5 +7,8 @@ BatteryWidget 1.0 BatteryWidget.qml
 NetworkWidget 1.0 NetworkWidget.qml
 NotificationsWidget 1.0 NotificationsWidget.qml
 CommandPalette 1.0 CommandPalette.qml
+NotificationCenter 1.0 NotificationCenter.qml
+ClockHub 1.0 ClockHub.qml
+QuickSettings 1.0 QuickSettings.qml
 WarmupOverlay 1.0 WarmupOverlay.qml
 RubberDuckOverlay 1.0 RubberDuckOverlay.qml

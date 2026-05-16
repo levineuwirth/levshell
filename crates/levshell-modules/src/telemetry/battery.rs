@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use levshell_core::{Event, EventBus, Module, ModuleError, ModuleResult, WidgetDescriptor};
+use levshell_core::{Event, EventBus, EventKind, Module, ModuleError, ModuleResult, WidgetDescriptor};
 use levshell_ipc::{
     DaemonMessage, EscalationLevel, PowerState, WidgetPublisher, WidgetStatus, WidgetUpdate,
 };
@@ -259,6 +259,31 @@ impl Module for BatteryModule {
 
     fn tick_interval(&self) -> Option<Duration> {
         Some(TICK_INTERVAL)
+    }
+
+    fn subscribed_events(&self) -> Vec<EventKind> {
+        // UPower watcher publishes this on AC-line changes; we re-sample
+        // sysfs immediately rather than waiting up to one TICK_INTERVAL.
+        vec![EventKind::AcLineChanged]
+    }
+
+    async fn on_event(&mut self, event: &Event) -> ModuleResult<()> {
+        if !matches!(event, Event::AcLineChanged { .. }) {
+            return Ok(());
+        }
+        // No-op until start() has located the battery sysfs directory.
+        let Some(dir) = self.battery_dir.as_ref() else {
+            return Ok(());
+        };
+        if let Some(state) = read_battery_state(dir) {
+            self.handle_sample(state);
+        } else {
+            tracing::warn!(
+                path = %dir.display(),
+                "telemetry-battery: AcLineChanged kick failed to read sysfs"
+            );
+        }
+        Ok(())
     }
 
     async fn start(&mut self) -> ModuleResult<()> {

@@ -204,6 +204,53 @@ pub fn default_themes_dir() -> Option<PathBuf> {
     crate::profiles::default_config_base().map(|b| b.join("themes"))
 }
 
+/// Bundled theme files, embedded at compile time. `bootstrap_themes`
+/// writes these into the user config dir on first run so the daemon
+/// has something to load without a manual `cp`.
+pub const BUILTIN_THEMES: &[(&str, &str)] = &[
+    (
+        "warm-dark",
+        include_str!("../../../config/themes/warm-dark.toml"),
+    ),
+    (
+        "neutral-dark",
+        include_str!("../../../config/themes/neutral-dark.toml"),
+    ),
+    (
+        "warm-light",
+        include_str!("../../../config/themes/warm-light.toml"),
+    ),
+];
+
+#[derive(Debug, Clone)]
+pub struct BootstrapReport {
+    pub dir: PathBuf,
+    pub written: Vec<String>,
+    pub skipped: Vec<String>,
+}
+
+/// Write each [`BUILTIN_THEMES`] entry to `<dir>/<name>.toml`, creating
+/// `dir` if needed. Existing files are skipped unless `force` is true.
+pub fn bootstrap_themes(dir: &Path, force: bool) -> std::io::Result<BootstrapReport> {
+    std::fs::create_dir_all(dir)?;
+    let mut written = Vec::new();
+    let mut skipped = Vec::new();
+    for (name, body) in BUILTIN_THEMES {
+        let path = dir.join(format!("{name}.toml"));
+        if path.exists() && !force {
+            skipped.push((*name).to_string());
+            continue;
+        }
+        std::fs::write(&path, body)?;
+        written.push((*name).to_string());
+    }
+    Ok(BootstrapReport {
+        dir: dir.to_path_buf(),
+        written,
+        skipped,
+    })
+}
+
 /// Load a theme by name from a directory. The filename is
 /// `<name>.toml`; unknown names return `NotFound`.
 pub fn load_theme(dir: &Path, name: &str) -> Result<ThemeFile, ThemeFileError> {
@@ -402,5 +449,54 @@ variant = "dark"
     fn list_themes_missing_dir_returns_empty() {
         let names = list_themes(Path::new("/nope/nope/themes"));
         assert!(names.is_empty());
+    }
+
+    #[test]
+    fn bootstrap_writes_bundled_themes_into_empty_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("themes");
+        let report = bootstrap_themes(&target, false).unwrap();
+
+        assert_eq!(report.dir, target);
+        assert_eq!(report.written.len(), BUILTIN_THEMES.len());
+        assert!(report.skipped.is_empty());
+
+        // Every bundled theme name lands as a parseable TOML file.
+        for (name, _) in BUILTIN_THEMES {
+            let path = target.join(format!("{name}.toml"));
+            assert!(path.exists(), "missing {name}.toml after bootstrap");
+            let parsed = ThemeFile::load_from(&path).unwrap();
+            assert!(!parsed.meta.name.is_empty());
+        }
+    }
+
+    #[test]
+    fn bootstrap_skips_existing_files_without_force() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("themes");
+        std::fs::create_dir_all(&target).unwrap();
+        let warm_dark = target.join("warm-dark.toml");
+        std::fs::write(&warm_dark, "user-edited").unwrap();
+
+        let report = bootstrap_themes(&target, false).unwrap();
+        assert!(report.skipped.contains(&"warm-dark".to_string()));
+        assert!(!report.written.contains(&"warm-dark".to_string()));
+        assert_eq!(std::fs::read_to_string(&warm_dark).unwrap(), "user-edited");
+    }
+
+    #[test]
+    fn bootstrap_force_overwrites_existing_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("themes");
+        std::fs::create_dir_all(&target).unwrap();
+        let warm_dark = target.join("warm-dark.toml");
+        std::fs::write(&warm_dark, "user-edited").unwrap();
+
+        let report = bootstrap_themes(&target, true).unwrap();
+        assert!(report.written.contains(&"warm-dark".to_string()));
+        assert!(report.skipped.is_empty());
+        let body = std::fs::read_to_string(&warm_dark).unwrap();
+        assert_ne!(body, "user-edited", "force should overwrite");
+        assert!(ThemeFile::load_from(&warm_dark).is_ok());
     }
 }

@@ -27,6 +27,7 @@ futures-util.workspace = true
 reqwest.workspace = true
 swayipc-async.workspace = true
 notify-rust.workspace = true
+zbus.workspace = true
 tokio = { workspace = true, features = ["rt", "sync", "time", "macros", "process", "io-util", "net"] }
 uuid.workspace = true
 

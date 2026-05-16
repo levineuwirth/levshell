@@ -164,6 +164,14 @@ enum ThemeCmd {
     Query,
     /// Enumerate available themes.
     List,
+    /// Install bundled default themes into `~/.config/levshell/themes/`.
+    /// Does not require the daemon — it's a local file write. Existing
+    /// theme files are skipped unless `--force` is passed.
+    Bootstrap {
+        /// Overwrite existing theme files.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Debug, Copy, Clone, ValueEnum)]
@@ -242,6 +250,16 @@ async fn main() -> ExitCode {
 
 async fn real_main() -> Result<()> {
     let cli = Cli::parse();
+
+    // Local-only commands short-circuit the IPC roundtrip — they don't
+    // need a running daemon. Bootstrap writes bundled themes to disk; the
+    // daemon's inotify watch picks them up on the next tick.
+    if let Command::Theme {
+        action: ThemeCmd::Bootstrap { force },
+    } = &cli.command
+    {
+        return run_theme_bootstrap(*force);
+    }
 
     let socket_path = match cli.socket {
         Some(p) => p,
@@ -350,6 +368,10 @@ fn build_request(cmd: Command) -> CtlRequest {
                 action: ThemeAction::List,
                 name: None,
             },
+            ThemeCmd::Bootstrap { .. } => {
+                // Handled in real_main before IPC dispatch.
+                unreachable!("ThemeCmd::Bootstrap is local-only")
+            }
         },
         Command::Warmup { action } => match action {
             WarmupCmd::Open => CtlRequest::Warmup {
@@ -386,6 +408,33 @@ fn build_request(cmd: Command) -> CtlRequest {
             },
         },
     }
+}
+
+fn run_theme_bootstrap(force: bool) -> Result<()> {
+    let dir = levshell_config::default_themes_dir()
+        .context("could not resolve $XDG_CONFIG_HOME/levshell/themes")?;
+    let report = levshell_config::bootstrap_themes(&dir, force)
+        .with_context(|| format!("writing bundled themes to {}", dir.display()))?;
+    println!("themes dir: {}", report.dir.display());
+    if !report.written.is_empty() {
+        println!("installed:");
+        for n in &report.written {
+            println!("  {n}");
+        }
+    }
+    if !report.skipped.is_empty() {
+        println!("skipped (already exist):");
+        for n in &report.skipped {
+            println!("  {n}");
+        }
+        if !force {
+            println!("(pass --force to overwrite)");
+        }
+    }
+    if report.written.is_empty() && report.skipped.is_empty() {
+        println!("(no bundled themes available)");
+    }
+    Ok(())
 }
 
 fn print_response(response: &CtlResponse) {
@@ -436,6 +485,7 @@ fn print_response(response: &CtlResponse) {
         CtlResponse::Themes { names } => {
             if names.is_empty() {
                 println!("(no themes installed)");
+                println!("hint: run `levshell-ctl theme bootstrap` to install defaults");
             } else {
                 for n in names {
                     println!("{n}");

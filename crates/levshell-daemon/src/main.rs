@@ -15,8 +15,8 @@ use levshell_modules::{
     CpuModule, FocusModeModule, GpuDashboardModule, HostRegistry, IdeationModule,
     InterruptionCostModule, MemoryModule, NetworkModule, NotificationsModule, NoteSearchProvider,
     PaletteModule, PaletteProvider, RemoteJobsModule, RemoteRunner, RubberDuckConfig,
-    RubberDuckModule, SshMonitorModule, SshRunner, SwayWorkspaceModule, WarmupModule,
-    WorkspaceSwitcherProvider,
+    RubberDuckModule, SshMonitorModule, SshRunner, SwayWorkspaceModule, UPowerWatcherModule,
+    WarmupModule, WorkspaceSwitcherProvider,
 };
 use levshell_sync::{
     AnkiConnectAdapter, AnkiConnectConfig, AnkiConnectConfigWatcher, CalDavAdapter, CalDavConfig,
@@ -224,6 +224,8 @@ async fn main() -> Result<()> {
                 Box::new(MemoryModule::new(bus.clone(), publisher.clone()))
                     as Box<dyn levshell_core::Module>,
                 Box::new(BatteryModule::new(bus.clone(), publisher.clone()))
+                    as Box<dyn levshell_core::Module>,
+                Box::new(UPowerWatcherModule::new(bus.clone()))
                     as Box<dyn levshell_core::Module>,
                 Box::new(NetworkModule::new(publisher)) as Box<dyn levshell_core::Module>,
                 Box::new(palette) as Box<dyn levshell_core::Module>,

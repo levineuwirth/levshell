@@ -1172,6 +1172,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "levshell-config",
  "levshell-ipc",
  "tokio",
 ]
@@ -1252,6 +1253,7 @@ dependencies = [
  "toml",
  "tracing",
  "uuid",
+ "zbus",
 ]
 
 [[package]]
@@ -2456,6 +2458,7 @@ dependencies = [
  "signal-hook-registry",
  "socket2",
  "tokio-macros",
+ "tracing",
  "windows-sys 0.61.2",
 ]
 
@@ -3434,6 +3437,7 @@ dependencies = [
  "ordered-stream",
  "serde",
  "serde_repr",
+ "tokio",
  "tracing",
  "uds_windows",
  "windows-sys 0.60.2",

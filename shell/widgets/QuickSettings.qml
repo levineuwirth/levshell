@@ -111,11 +111,11 @@ Rectangle {
         { icon: "\uE334",             label: "Night Light",    active: false,            stub: true  },
     ]
 
-    implicitWidth: 320
+    implicitWidth: 400
     implicitHeight: contentCol.implicitHeight + 2 * Theme.panelInnerPadding
 
     color: Qt.rgba(Theme.surface.r, Theme.surface.g, Theme.surface.b,
-                   Theme.onBattery ? Theme.barOpacityBattery : Theme.barOpacity)
+                   Theme.onBattery ? Theme.panelOpacityBattery : Theme.panelOpacity)
     Behavior on color { ColorAnimation { duration: Theme.motionNormal } }
     radius: Theme.panelCornerRadius
     border.width: Theme.panelBorderWidth

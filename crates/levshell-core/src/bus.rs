@@ -51,6 +51,15 @@ pub enum Event {
     /// The system transitioned between AC and battery power.
     PowerStateChanged { on_battery: bool },
 
+    /// Low-latency notification from the UPower D-Bus watcher that the
+    /// AC line transitioned. Distinct from [`PowerStateChanged`] because
+    /// the battery module remains the sole producer of `PowerStateChanged`
+    /// — it consumes this kick to re-sample sysfs immediately and emits
+    /// the "official" `PowerStateChanged` from a single, deduplicated
+    /// path. Subscribers other than the battery module should use
+    /// `PowerStateChanged`.
+    AcLineChanged { on_battery: bool },
+
     /// A ctl client requested a bar-density change. Stringly-typed so
     /// `levshell-core` stays free of any IPC dependency. Values match the
     /// serde-rendered form of `levshell_ipc::BarDensity`: `"full"`,
@@ -195,6 +204,7 @@ pub enum EventKind {
     WindowFocused,
     DataStoreUpdated,
     PowerStateChanged,
+    AcLineChanged,
     BarDensityRequested,
     ProfileActionRequested,
     PaletteActionRequested,
@@ -219,6 +229,7 @@ impl Event {
             Event::WindowFocused { .. } => EventKind::WindowFocused,
             Event::DataStoreUpdated { .. } => EventKind::DataStoreUpdated,
             Event::PowerStateChanged { .. } => EventKind::PowerStateChanged,
+            Event::AcLineChanged { .. } => EventKind::AcLineChanged,
             Event::BarDensityRequested { .. } => EventKind::BarDensityRequested,
             Event::ProfileActionRequested { .. } => EventKind::ProfileActionRequested,
             Event::PaletteActionRequested { .. } => EventKind::PaletteActionRequested,

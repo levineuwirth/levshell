@@ -780,7 +780,7 @@ fn dispatch_theme(
         ThemeAction::Query => match state.theme.snapshot() {
             Some(snap) => CtlResponse::ActiveTheme(snap),
             None => CtlResponse::Error {
-                message: "no theme active (themes dir missing or empty)".into(),
+                message: "no theme active (themes dir missing or empty); run `levshell-ctl theme bootstrap` to install defaults".into(),
             },
         },
         ThemeAction::List => CtlResponse::Themes {

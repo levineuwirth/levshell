@@ -13,6 +13,7 @@ name = "levshell-ctl"
 path = "src/main.rs"
 
 [dependencies]
+levshell-config.workspace = true
 levshell-ipc.workspace = true
 
 tokio = { workspace = true, features = ["rt", "macros", "net", "io-util"] }

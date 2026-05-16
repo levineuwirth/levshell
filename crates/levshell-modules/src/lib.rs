@@ -66,7 +66,7 @@ pub use sway::{
 };
 pub use telemetry::{
     BatteryModule, BatteryState, BatteryStatus, CpuModule, CpuSample, CpuState, IfaceRate,
-    MemoryModule, MemoryState, NetworkModule, NetworkState, BATTERY_WIDGET_ID,
-    BATTERY_WIDGET_TYPE, CPU_WIDGET_ID, CPU_WIDGET_TYPE, MEMORY_WIDGET_ID, MEMORY_WIDGET_TYPE,
-    NETWORK_WIDGET_ID, NETWORK_WIDGET_TYPE,
+    MemoryModule, MemoryState, NetworkModule, NetworkState, UPowerWatcherModule,
+    BATTERY_WIDGET_ID, BATTERY_WIDGET_TYPE, CPU_WIDGET_ID, CPU_WIDGET_TYPE, MEMORY_WIDGET_ID,
+    MEMORY_WIDGET_TYPE, NETWORK_WIDGET_ID, NETWORK_WIDGET_TYPE,
 };

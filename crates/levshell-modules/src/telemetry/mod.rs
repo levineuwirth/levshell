@@ -39,6 +39,7 @@ pub mod battery;
 pub mod cpu;
 pub mod memory;
 pub mod network;
+pub mod upower;
 
 pub use battery::{
     BatteryModule, BatteryState, BatteryStatus, BATTERY_WIDGET_ID, BATTERY_WIDGET_TYPE,
@@ -48,3 +49,4 @@ pub use memory::{MemoryModule, MemoryState, MEMORY_WIDGET_ID, MEMORY_WIDGET_TYPE
 pub use network::{
     IfaceCounters, IfaceRate, NetworkModule, NetworkState, NETWORK_WIDGET_ID, NETWORK_WIDGET_TYPE,
 };
+pub use upower::UPowerWatcherModule;
