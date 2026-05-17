@@ -16,3 +16,10 @@ ClockHub 1.0 ClockHub.qml
 QuickSettings 1.0 QuickSettings.qml
 WarmupOverlay 1.0 WarmupOverlay.qml
 RubberDuckOverlay 1.0 RubberDuckOverlay.qml
+AnkiDueWidget 1.0 AnkiDueWidget.qml
+GpuDashboard 1.0 GpuDashboard.qml
+GpuFleetPanel 1.0 GpuFleetPanel.qml
+RemoteJobsWidget 1.0 RemoteJobsWidget.qml
+RemoteJobsPanel 1.0 RemoteJobsPanel.qml
+SshDashboard 1.0 SshDashboard.qml
+SshFleetPanel 1.0 SshFleetPanel.qml
