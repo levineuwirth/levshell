@@ -24,6 +24,7 @@ pub mod interruption;
 pub mod palette;
 pub mod warmup;
 pub mod remote;
+pub mod session_timer;
 pub mod sway;
 pub mod telemetry;
 pub mod theme;
@@ -58,6 +59,9 @@ pub use remote::{
     RemoteJobsModule, RemoteJobsState, RemoteRunner, SlurmJob, SshFleetState, SshHostState,
     SshMonitorModule, SshRunner, GPU_WIDGET_ID, GPU_WIDGET_TYPE, JOBS_WIDGET_ID, JOBS_WIDGET_TYPE,
     SSH_WIDGET_ID, SSH_WIDGET_TYPE,
+};
+pub use session_timer::{
+    SessionTimerConfig, SessionTimerModule, SESSION_TIMER_WIDGET_ID, SESSION_TIMER_WIDGET_TYPE,
 };
 pub use theme::{ThemeService, DEFAULT_THEME_NAME};
 pub use warmup::{

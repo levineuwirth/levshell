@@ -146,6 +146,12 @@ pub enum CtlRequest {
     /// [`CtlResponse::Count`].
     AnkiDueCount,
 
+    /// Drive the Pomodoro / focus-session timer (spec §2.2.1). The
+    /// daemon publishes `Event::SessionTimerCommand` and replies
+    /// [`CtlResponse::Ok`] — fire-and-forget; the bar pill reflects
+    /// the new state.
+    Timer { action: TimerAction },
+
     /// Forward a generic widget action onto the daemon bus (spec §2.19.1,
     /// e.g. `levshell-ctl widget ssh-dashboard reconnect host=gpu-3`).
     /// `data` is a JSON object string assembled by the ctl client from
@@ -194,6 +200,23 @@ impl NotifyUrgency {
             NotifyUrgency::Critical => "critical",
         }
     }
+}
+
+/// What to do with the session timer. See [`CtlRequest::Timer`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum TimerAction {
+    /// Start a work interval (from idle) or resume (from paused).
+    Start,
+    /// Freeze the elapsed counter.
+    Pause,
+    /// Unfreeze a paused timer.
+    Resume,
+    /// End the current interval and return to idle.
+    Stop,
+    /// End the current interval immediately and advance to the next.
+    Skip,
 }
 
 /// What to do with the rubber-duck overlay. See [`CtlRequest::Duck`].

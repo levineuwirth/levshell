@@ -16,8 +16,8 @@ use levshell_modules::{
     CpuModule, FocusModeModule, GpuDashboardModule, HostRegistry, IdeationModule,
     InterruptionCostModule, MemoryModule, NetworkModule, NotificationsModule, NoteSearchProvider,
     PaletteModule, PaletteProvider, RemoteJobsModule, RemoteRunner, RubberDuckConfig,
-    RubberDuckModule, SshMonitorModule, SshRunner, SwayWorkspaceModule, UPowerWatcherModule,
-    WarmupModule, WorkspaceSwitcherProvider,
+    RubberDuckModule, SessionTimerConfig, SessionTimerModule, SshMonitorModule, SshRunner,
+    SwayWorkspaceModule, UPowerWatcherModule, WarmupModule, WorkspaceSwitcherProvider,
 };
 use levshell_sync::{
     AnkiConnectAdapter, AnkiConnectConfig, AnkiConnectConfigWatcher, CalDavAdapter, CalDavConfig,
@@ -119,6 +119,17 @@ async fn main() -> Result<()> {
         model = rubber_duck_config.model,
         "rubber-duck config loaded"
     );
+    // Session timer config (spec §2.2.1). Missing `session_timer.toml`
+    // → classic 25/5/15-after-4 Pomodoro.
+    let session_timer_config = levshell_config::default_config_base()
+        .map(|dir| SessionTimerConfig::load_from_dir(&dir))
+        .unwrap_or_default();
+    tracing::info!(
+        work_minutes = session_timer_config.work_minutes,
+        break_minutes = session_timer_config.break_minutes,
+        "session-timer config loaded"
+    );
+
     let warmup_state_path = default_warmup_state_path();
     tracing::info!(
         gap_secs = warmup_config.gap_secs,
@@ -174,6 +185,7 @@ async fn main() -> Result<()> {
         let warmup_config = warmup_config.clone();
         let warmup_state_path = warmup_state_path.clone();
         let rubber_duck_config = rubber_duck_config.clone();
+        let session_timer_config = session_timer_config.clone();
         Box::new(move |bus, publisher, store, projects| {
             let context_engine = {
                 let ce = default_context_engine(publisher.clone())
@@ -202,6 +214,11 @@ async fn main() -> Result<()> {
             // `publisher` is moved into NetworkModule in the vec below.
             let clock = ClockModule::new(store.clone(), publisher.clone());
             let anki_due = AnkiDueModule::new(store.clone(), publisher.clone());
+            let session_timer = SessionTimerModule::new(
+                bus.clone(),
+                publisher.clone(),
+                session_timer_config.clone(),
+            );
             let proc_sniper = ProcessSniperModule::new(publisher.clone());
             let warmup = WarmupModule::with_config(
                 publisher.clone(),
@@ -253,6 +270,7 @@ async fn main() -> Result<()> {
                 Box::new(ideation) as Box<dyn levshell_core::Module>,
                 Box::new(clock) as Box<dyn levshell_core::Module>,
                 Box::new(anki_due) as Box<dyn levshell_core::Module>,
+                Box::new(session_timer) as Box<dyn levshell_core::Module>,
                 Box::new(proc_sniper) as Box<dyn levshell_core::Module>,
                 Box::new(warmup) as Box<dyn levshell_core::Module>,
                 Box::new(rubber_duck) as Box<dyn levshell_core::Module>,

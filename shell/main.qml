@@ -160,6 +160,16 @@ Scope {
         onTriggered: shell.nudgeVisible = false
     }
 
+    // Focus-mode indicator source (spec §10). Derived from the
+    // session-timer widget state the shell already receives — no extra
+    // wire surface. `sessionPhase` is "idle" | "work" | "break".
+    readonly property string sessionPhase:
+        (shell.widgetStates["session-timer"] || ({})).phase || "idle"
+    readonly property bool sessionPaused:
+        (shell.widgetStates["session-timer"] || ({})).paused === true
+    readonly property bool sessionRunning:
+        sessionPhase === "work" || sessionPhase === "break"
+
     // Close every bar dropdown except `keep` (a property name or "").
     function closeDropdownsExcept(keep) {
         if (keep !== "notificationCenterOpen") notificationCenterOpen = false;
@@ -197,6 +207,12 @@ Scope {
         shell.sendShellMessage({
             type: "widget_action", widget_id: "ssh-fleet",
             action: "reconnect", data: { host: host }
+        });
+    }
+    function sendTimerToggle() {
+        shell.sendShellMessage({
+            type: "widget_action", widget_id: "session-timer",
+            action: "toggle", data: {}
         });
     }
     function openProcessSniper() {
@@ -249,7 +265,8 @@ Scope {
         "ssh-fleet": sshDashboardComponent,
         "gpu-fleet": gpuDashboardComponent,
         "remote-jobs": remoteJobsComponent,
-        "anki-due": ankiDueComponent
+        "anki-due": ankiDueComponent,
+        "session-timer": sessionTimerComponent
     })
 
     Component { id: workspaceIndicatorComponent; WorkspaceIndicator {} }
@@ -266,6 +283,7 @@ Scope {
     Component { id: gpuDashboardComponent; GpuDashboard {} }
     Component { id: remoteJobsComponent; RemoteJobsWidget {} }
     Component { id: ankiDueComponent; AnkiDueWidget {} }
+    Component { id: sessionTimerComponent; SessionTimerWidget {} }
 
     // ----------------------------------------------------------------------
     // Dispatch a parsed DaemonMessage into the state stores.
@@ -603,6 +621,27 @@ Scope {
                 height: 1
                 color: Theme.bgDark
                 opacity: 0.30
+            }
+
+            // Persistent focus indicator — spec §10. A 2px bottom-edge
+            // line while a focus session runs: primary for work, success
+            // for a break, dimmed when paused. Additive (sits above the
+            // contrast strip); no widget chrome is touched, so the §10.1
+            // escalation > health > focus stacking is untouched here.
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 2
+                visible: opacity > 0.01
+                opacity: shell.sessionRunning ? (shell.sessionPaused ? 0.35 : 1.0) : 0.0
+                color: shell.sessionPhase === "break" ? Theme.success : Theme.primary
+                Behavior on opacity {
+                    NumberAnimation { duration: Theme.motionNormal; easing.type: Easing.OutCubic }
+                }
+                Behavior on color {
+                    ColorAnimation { duration: Theme.motionNormal }
+                }
             }
 
             // Keeps the bar revealed while the pointer is over it in

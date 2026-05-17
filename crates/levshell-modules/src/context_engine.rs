@@ -339,6 +339,25 @@ impl ContextEngineModule {
             Event::ProfileActionRequested { action, name } => {
                 self.apply_profile_action(action, name.as_deref());
             }
+            // Focus-session signal (spec §3.5.1). Before the session
+            // timer module existed this input had no producer; the
+            // timer's interval-boundary events now drive it so profiles
+            // can predicate on `focus_session.active` /
+            // `focus_session.on_break` / `focus_session.kind`.
+            Event::FocusSessionStarted { kind, .. } => {
+                self.signals.set("focus_session.active", true);
+                self.signals
+                    .set("focus_session.on_break", kind == "break");
+                self.signals.set("focus_session.kind", kind.clone());
+            }
+            Event::FocusSessionEnded { .. } => {
+                // On auto-advance a FocusSessionStarted for the next
+                // interval immediately follows and re-sets these; on
+                // `stop` nothing follows, so idle is the resting state.
+                self.signals.set("focus_session.active", false);
+                self.signals.set("focus_session.on_break", false);
+                self.signals.set("focus_session.kind", "idle".to_owned());
+            }
             _ => {}
         }
     }
@@ -438,6 +457,8 @@ impl Module for ContextEngineModule {
             EventKind::PowerStateChanged,
             EventKind::BarDensityRequested,
             EventKind::ProfileActionRequested,
+            EventKind::FocusSessionStarted,
+            EventKind::FocusSessionEnded,
         ]
     }
 
@@ -684,6 +705,66 @@ mod tests {
                 .get("workspace.name")
                 .and_then(|v| v.as_str()),
             Some("code")
+        );
+    }
+
+    #[tokio::test]
+    async fn focus_session_events_drive_the_signal() {
+        let (publisher, _handle, _reader) = writer_over_duplex();
+        let mut module = ContextEngineModule::new(publisher).with_widgets(three_widgets());
+
+        // A work interval started.
+        module
+            .on_event(&Event::FocusSessionStarted {
+                kind: "work".into(),
+                project: Some("llm-alignment".into()),
+                planned_secs: 1500,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            module.signals.get("focus_session.active").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            module.signals.get("focus_session.on_break").and_then(|v| v.as_bool()),
+            Some(false)
+        );
+        assert_eq!(
+            module.signals.get("focus_session.kind").and_then(|v| v.as_str()),
+            Some("work")
+        );
+
+        // Auto-advanced into a break.
+        module
+            .on_event(&Event::FocusSessionStarted {
+                kind: "break".into(),
+                project: Some("llm-alignment".into()),
+                planned_secs: 300,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            module.signals.get("focus_session.on_break").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+
+        // Stopped → idle resting state.
+        module
+            .on_event(&Event::FocusSessionEnded {
+                kind: "break".into(),
+                project: Some("llm-alignment".into()),
+                actual_secs: 42,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            module.signals.get("focus_session.active").and_then(|v| v.as_bool()),
+            Some(false)
+        );
+        assert_eq!(
+            module.signals.get("focus_session.kind").and_then(|v| v.as_str()),
+            Some("idle")
         );
     }
 

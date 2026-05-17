@@ -229,6 +229,32 @@ pub enum Event {
         body: String,
         urgency: String,
     },
+
+    /// A focus/break interval began (spec §2.2.1 / §3.6). `kind` is
+    /// `"work"` or `"break"`; `project` is the workspace/project active
+    /// when it started (best-effort, may be `None`); `planned_secs` is
+    /// the configured length. The context engine derives its
+    /// `focus_session` signal from this + [`Self::FocusSessionEnded`].
+    FocusSessionStarted {
+        kind: String,
+        project: Option<String>,
+        planned_secs: u64,
+    },
+
+    /// A focus/break interval ended (completed, skipped, or stopped).
+    /// `actual_secs` is the time actually spent in it.
+    FocusSessionEnded {
+        kind: String,
+        project: Option<String>,
+        actual_secs: u64,
+    },
+
+    /// A ctl client / keybind drove the session timer (spec §2.2.1).
+    /// `action` is `"start"`, `"pause"`, `"resume"`, `"stop"`, or
+    /// `"skip"` — stringly-typed so `levshell-core` stays IPC-free.
+    SessionTimerCommand {
+        action: String,
+    },
 }
 
 /// A discriminant for filtering subscriptions without instantiating an [`Event`].
@@ -259,6 +285,9 @@ pub enum EventKind {
     ProcessKillRequested,
     WidgetActionReceived,
     NotifyRequested,
+    FocusSessionStarted,
+    FocusSessionEnded,
+    SessionTimerCommand,
 }
 
 impl Event {
@@ -288,6 +317,9 @@ impl Event {
             Event::ProcessKillRequested { .. } => EventKind::ProcessKillRequested,
             Event::WidgetActionReceived { .. } => EventKind::WidgetActionReceived,
             Event::NotifyRequested { .. } => EventKind::NotifyRequested,
+            Event::FocusSessionStarted { .. } => EventKind::FocusSessionStarted,
+            Event::FocusSessionEnded { .. } => EventKind::FocusSessionEnded,
+            Event::SessionTimerCommand { .. } => EventKind::SessionTimerCommand,
         }
     }
 }
