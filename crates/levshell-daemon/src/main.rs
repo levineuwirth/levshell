@@ -11,13 +11,12 @@ use anyhow::Result;
 use levshell_config::{load_profiles_from_dir, spawn_profile_watcher};
 use levshell_daemon::{init_tracing, run_with_sync, DaemonConfig, ModuleFactory, SyncAdapterFactory};
 use levshell_modules::{
-    default_context_engine, default_warmup_state_path, AnkiDueModule, AppLauncherProvider,
-    BatteryModule, ClockModule, ProcessSniperModule,
-    CpuModule, FocusModeModule, GpuDashboardModule, HostRegistry, IdeationModule,
-    InterruptionCostModule, MemoryModule, NetworkModule, NotificationsModule, NoteSearchProvider,
-    PaletteModule, PaletteProvider, RemoteJobsModule, RemoteRunner, RubberDuckConfig,
+    default_context_engine, default_palette_providers, default_warmup_state_path, AnkiDueModule,
+    BatteryModule, ClockModule, CpuModule, FocusModeModule, GpuDashboardModule, HostRegistry,
+    IdeationModule, InterruptionCostModule, MemoryModule, NetworkModule, NotificationsModule,
+    PaletteModule, ProcessSniperModule, RemoteJobsModule, RemoteRunner, RubberDuckConfig,
     RubberDuckModule, SessionTimerConfig, SessionTimerModule, SshMonitorModule, SshRunner,
-    SwayWorkspaceModule, UPowerWatcherModule, WarmupModule, WorkspaceSwitcherProvider,
+    SwayWorkspaceModule, UPowerWatcherModule, WarmupModule,
 };
 use levshell_sync::{
     AnkiConnectAdapter, AnkiConnectConfig, AnkiConnectConfigWatcher, CalDavAdapter, CalDavConfig,
@@ -196,13 +195,10 @@ async fn main() -> Result<()> {
                 }
             };
             let focus_mode = FocusModeModule::new(bus.clone(), shared_profiles);
-            let palette_providers: Vec<Box<dyn PaletteProvider>> = vec![
-                Box::new(AppLauncherProvider::new()),
-                Box::new(WorkspaceSwitcherProvider::new()),
-                Box::new(NoteSearchProvider::new(store.clone())),
-            ];
-            let palette =
-                PaletteModule::new(publisher.clone()).with_providers(palette_providers);
+            // Single registration point (M3.14) — the canonical built-in
+            // provider set lives in levshell_modules::palette.
+            let palette = PaletteModule::new(publisher.clone())
+                .with_providers(default_palette_providers(store.clone()));
             let ideation = IdeationModule::with_config(
                 bus.clone(),
                 publisher.clone(),
