@@ -69,8 +69,9 @@ pub use warmup::{
     WarmupConfig, WarmupConfigError, WarmupModule,
 };
 pub use palette::{
-    AppLauncherProvider, NoteSearchProvider, PaletteItem, PaletteModule, PaletteProvider,
-    PaletteState, WorkspaceSwitcherProvider, sway_switch_workspace, PALETTE_WIDGET_ID,
+    default_palette_providers, AppLauncherProvider, CalcProvider, NoteSearchProvider, PaletteItem,
+    PaletteModule, PaletteProvider, PaletteState, RecentDocsProvider, RefSearchProvider,
+    UnicodeProvider, WorkspaceSwitcherProvider, sway_switch_workspace, PALETTE_WIDGET_ID,
     PALETTE_WIDGET_TYPE,
 };
 pub use sway::{
