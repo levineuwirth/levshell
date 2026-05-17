@@ -74,6 +74,20 @@ pub enum DaemonMessage {
     /// sniper (spec §2.3.5). Pushed in response to the user opening the
     /// sniper; the shell renders a kill list.
     ProcessList(Box<ProcessListPayload>),
+    /// An ideation nudge to surface as a transient, non-modal toast
+    /// (spec §2.9.2). Pushed by the notifications module alongside the
+    /// Freedesktop path so the shell shows it even when another daemon
+    /// owns `org.freedesktop.Notifications`.
+    Nudge(Nudge),
+}
+
+/// Payload for [`DaemonMessage::Nudge`]. `kind` is the ideation
+/// category (`open_question` / `cross_connection` / `blocked_escalation`);
+/// `title` is the pre-formatted line to show.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Nudge {
+    pub kind: String,
+    pub title: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

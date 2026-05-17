@@ -206,6 +206,29 @@ pub enum Event {
         pid: i32,
         signal: String,
     },
+
+    /// A widget action the daemon does not special-case internally.
+    /// Routed from `ShellMessage::WidgetAction` and from
+    /// `ctl widget <id> <action> ...`. `data` is the action payload as a
+    /// JSON string — `levshell-core` is a leaf crate with no serde_json
+    /// dependency, so structured payloads are stringified at the routing
+    /// boundary and parsed by the consuming module via
+    /// `serde_json::from_str`. An empty payload is the string `"{}"`.
+    WidgetActionReceived {
+        widget_id: String,
+        action: String,
+        data: String,
+    },
+
+    /// A ctl client asked for a desktop notification (spec §2.19.1,
+    /// `levshell-ctl notify "Build finished" --urgency normal`). `urgency`
+    /// is `"low"`, `"normal"`, or `"critical"` — stringly-typed to keep
+    /// this crate dependency-free.
+    NotifyRequested {
+        title: String,
+        body: String,
+        urgency: String,
+    },
 }
 
 /// A discriminant for filtering subscriptions without instantiating an [`Event`].
@@ -234,6 +257,8 @@ pub enum EventKind {
     CriticalEscalation,
     ProcessListRequested,
     ProcessKillRequested,
+    WidgetActionReceived,
+    NotifyRequested,
 }
 
 impl Event {
@@ -261,6 +286,8 @@ impl Event {
             Event::CriticalEscalation { .. } => EventKind::CriticalEscalation,
             Event::ProcessListRequested => EventKind::ProcessListRequested,
             Event::ProcessKillRequested { .. } => EventKind::ProcessKillRequested,
+            Event::WidgetActionReceived { .. } => EventKind::WidgetActionReceived,
+            Event::NotifyRequested { .. } => EventKind::NotifyRequested,
         }
     }
 }

@@ -13,8 +13,8 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use levshell_ipc::{
     default_socket_path, BarDensity, ClientRole, ContextSnapshotAction, CtlRequest, CtlResponse,
-    DuckAction, Hello, IpcConnection, JsonCodec, PaletteAction, ProfileAction, ThemeAction,
-    WarmupAction,
+    DuckAction, Hello, IpcConnection, JsonCodec, NotifyUrgency, PaletteAction, ProfileAction,
+    ThemeAction, WarmupAction,
 };
 use tokio::net::UnixStream;
 
@@ -110,6 +110,97 @@ enum Command {
         #[command(subcommand)]
         action: DuckCmd,
     },
+
+    /// Forward a generic action to a bar widget (spec §2.19.1), e.g.
+    /// `levshell-ctl widget ssh-dashboard reconnect host=gpu-3`.
+    /// Trailing `key=value` params become a JSON payload the widget's
+    /// module receives.
+    Widget {
+        /// Target widget id (e.g. `ssh-dashboard`).
+        widget_id: String,
+        /// Action name (e.g. `reconnect`).
+        action: String,
+        /// Zero or more `key=value` params.
+        #[arg(value_name = "KEY=VALUE")]
+        params: Vec<String>,
+    },
+
+    /// Anki / spaced-repetition queries (spec §2.19.1).
+    Anki {
+        #[command(subcommand)]
+        action: AnkiCmd,
+    },
+
+    /// Emit a desktop notification (spec §2.19.1), e.g.
+    /// `levshell-ctl notify "Build finished" --urgency normal`.
+    Notify {
+        /// Notification body text.
+        body: String,
+        /// Summary line. Defaults to "Levshell".
+        #[arg(long, default_value = "Levshell")]
+        title: String,
+        /// Urgency level.
+        #[arg(long, value_enum, default_value_t = CliUrgency::Normal)]
+        urgency: CliUrgency,
+    },
+}
+
+#[derive(Debug, Copy, Clone, ValueEnum)]
+enum CliUrgency {
+    Low,
+    Normal,
+    Critical,
+}
+
+impl From<CliUrgency> for NotifyUrgency {
+    fn from(value: CliUrgency) -> Self {
+        match value {
+            CliUrgency::Low => NotifyUrgency::Low,
+            CliUrgency::Normal => NotifyUrgency::Normal,
+            CliUrgency::Critical => NotifyUrgency::Critical,
+        }
+    }
+}
+
+/// Build a flat JSON object string from `key=value` params. Keys/values
+/// are JSON-string-escaped; a param with no `=` maps to an empty string.
+/// ctl stays serde_json-free by design, so this is a tiny hand-roller —
+/// the daemon validates the result and rejects anything malformed.
+fn params_to_json(params: &[String]) -> String {
+    fn esc(s: &str) -> String {
+        let mut out = String::with_capacity(s.len() + 2);
+        for c in s.chars() {
+            match c {
+                '"' => out.push_str("\\\""),
+                '\\' => out.push_str("\\\\"),
+                '\n' => out.push_str("\\n"),
+                '\t' => out.push_str("\\t"),
+                '\r' => out.push_str("\\r"),
+                _ => out.push(c),
+            }
+        }
+        out
+    }
+    let mut s = String::from("{");
+    for (i, p) in params.iter().enumerate() {
+        if i > 0 {
+            s.push(',');
+        }
+        let (k, v) = p.split_once('=').unwrap_or((p.as_str(), ""));
+        s.push('"');
+        s.push_str(&esc(k));
+        s.push_str("\":\"");
+        s.push_str(&esc(v));
+        s.push('"');
+    }
+    s.push('}');
+    s
+}
+
+#[derive(Debug, Subcommand)]
+enum AnkiCmd {
+    /// Print the number of flashcards currently due.
+    DueCount,
 }
 
 #[derive(Debug, Subcommand)]
@@ -416,6 +507,27 @@ fn build_request(cmd: Command) -> CtlRequest {
                 action: DuckAction::Reset,
             },
         },
+        Command::Widget {
+            widget_id,
+            action,
+            params,
+        } => CtlRequest::Widget {
+            widget_id,
+            action,
+            data: params_to_json(&params),
+        },
+        Command::Notify {
+            body,
+            title,
+            urgency,
+        } => CtlRequest::Notify {
+            title,
+            body,
+            urgency: urgency.into(),
+        },
+        Command::Anki { action } => match action {
+            AnkiCmd::DueCount => CtlRequest::AnkiDueCount,
+        },
     }
 }
 
@@ -504,6 +616,7 @@ fn print_response(response: &CtlResponse) {
         CtlResponse::Error { message } => {
             eprintln!("error: {message}");
         }
+        CtlResponse::Count { count } => println!("{count}"),
         CtlResponse::ContextSnapshotResult { summary } => println!("{summary}"),
         CtlResponse::ContextSnapshots { names } => {
             if names.is_empty() {
@@ -517,5 +630,79 @@ fn print_response(response: &CtlResponse) {
         // `CtlResponse` is `#[non_exhaustive]`; future variants print a
         // placeholder so old ctl binaries stay usable against newer daemons.
         _ => println!("(unknown response from daemon)"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn params_to_json_builds_escaped_object() {
+        assert_eq!(params_to_json(&[]), "{}");
+        assert_eq!(
+            params_to_json(&["host=gpu-3".into()]),
+            r#"{"host":"gpu-3"}"#
+        );
+        assert_eq!(
+            params_to_json(&["a=1".into(), "b=2".into()]),
+            r#"{"a":"1","b":"2"}"#
+        );
+        // Bare key (no `=`) maps to empty string.
+        assert_eq!(params_to_json(&["flag".into()]), r#"{"flag":""}"#);
+        // Quotes/backslashes are escaped so the daemon's JSON parse holds.
+        assert_eq!(
+            params_to_json(&[r#"msg=a"b\c"#.into()]),
+            r#"{"msg":"a\"b\\c"}"#
+        );
+        // Only the first `=` splits; later ones stay in the value.
+        assert_eq!(
+            params_to_json(&["expr=x=y".into()]),
+            r#"{"expr":"x=y"}"#
+        );
+    }
+
+    #[test]
+    fn cli_parses_widget_and_notify() {
+        use clap::Parser;
+        let c = Cli::parse_from([
+            "levshell-ctl",
+            "widget",
+            "ssh-dashboard",
+            "reconnect",
+            "host=gpu-3",
+        ]);
+        match c.command {
+            Command::Widget {
+                widget_id,
+                action,
+                params,
+            } => {
+                assert_eq!(widget_id, "ssh-dashboard");
+                assert_eq!(action, "reconnect");
+                assert_eq!(params, vec!["host=gpu-3".to_string()]);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        let c = Cli::parse_from([
+            "levshell-ctl",
+            "notify",
+            "Build finished",
+            "--urgency",
+            "critical",
+        ]);
+        match c.command {
+            Command::Notify {
+                body,
+                title,
+                urgency,
+            } => {
+                assert_eq!(body, "Build finished");
+                assert_eq!(title, "Levshell");
+                assert!(matches!(urgency, CliUrgency::Critical));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
     }
 }

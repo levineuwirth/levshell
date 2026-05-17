@@ -10,6 +10,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod anki_due;
 pub mod clock;
 pub mod context_engine;
 pub mod proc_sniper;
@@ -27,6 +28,7 @@ pub mod sway;
 pub mod telemetry;
 pub mod theme;
 
+pub use anki_due::{AnkiDueModule, ANKI_DUE_WIDGET_ID, ANKI_DUE_WIDGET_TYPE};
 pub use clock::ClockModule;
 pub use proc_sniper::ProcessSniperModule;
 pub use context_engine::{

@@ -113,6 +113,15 @@ Scope {
     property var snoozedNotifUntil: ({})
     property bool clockHubOpen: false
     property bool quickSettingsOpen: false
+    // SSH fleet detail dropdown (§2.10.1). Its host list is the
+    // `ssh-fleet` widget state, read via shell.stateFor in the overlay.
+    property bool sshFleetOpen: false
+    // GPU fleet detail dropdown (§2.10.4); host/GPU list is the
+    // `gpu-fleet` widget state.
+    property bool gpuFleetOpen: false
+    // Remote SLURM jobs dropdown (§2.10.3); host/job list is the
+    // `remote-jobs` widget state.
+    property bool remoteJobsOpen: false
     // Bar density as chosen by the daemon. Theme.density is bound to an
     // *effective* value (see the Binding by the bar): in hidden mode,
     // pointing at the top screen edge transiently reveals the full bar
@@ -135,17 +144,60 @@ Scope {
     property bool duckStreaming: false
     property var duckMessages: []
 
+    // Ideation nudge toast (§2.9.2). Single-slot — nudges are Poisson-
+    // spaced (λ≈45min) so the latest simply replaces any showing one.
+    // Auto-dismisses; click dismisses early.
+    property var currentNudge: ({ kind: "", title: "" })
+    property bool nudgeVisible: false
+    function showNudge(msg) {
+        shell.currentNudge = { kind: msg.kind || "", title: msg.title || "" };
+        shell.nudgeVisible = true;
+        nudgeDismissTimer.restart();
+    }
+    Timer {
+        id: nudgeDismissTimer
+        interval: 7000
+        onTriggered: shell.nudgeVisible = false
+    }
+
+    // Close every bar dropdown except `keep` (a property name or "").
+    function closeDropdownsExcept(keep) {
+        if (keep !== "notificationCenterOpen") notificationCenterOpen = false;
+        if (keep !== "clockHubOpen")           clockHubOpen = false;
+        if (keep !== "quickSettingsOpen")      quickSettingsOpen = false;
+        if (keep !== "sshFleetOpen")           sshFleetOpen = false;
+        if (keep !== "gpuFleetOpen")           gpuFleetOpen = false;
+        if (keep !== "remoteJobsOpen")         remoteJobsOpen = false;
+    }
     function toggleNotificationCenter() {
         notificationCenterOpen = !notificationCenterOpen;
-        if (notificationCenterOpen) { clockHubOpen = false; quickSettingsOpen = false; }
+        if (notificationCenterOpen) closeDropdownsExcept("notificationCenterOpen");
     }
     function toggleClockHub() {
         clockHubOpen = !clockHubOpen;
-        if (clockHubOpen) { notificationCenterOpen = false; quickSettingsOpen = false; }
+        if (clockHubOpen) closeDropdownsExcept("clockHubOpen");
     }
     function toggleQuickSettings() {
         quickSettingsOpen = !quickSettingsOpen;
-        if (quickSettingsOpen) { notificationCenterOpen = false; clockHubOpen = false; }
+        if (quickSettingsOpen) closeDropdownsExcept("quickSettingsOpen");
+    }
+    function toggleSshFleet() {
+        sshFleetOpen = !sshFleetOpen;
+        if (sshFleetOpen) closeDropdownsExcept("sshFleetOpen");
+    }
+    function toggleGpuFleet() {
+        gpuFleetOpen = !gpuFleetOpen;
+        if (gpuFleetOpen) closeDropdownsExcept("gpuFleetOpen");
+    }
+    function toggleRemoteJobs() {
+        remoteJobsOpen = !remoteJobsOpen;
+        if (remoteJobsOpen) closeDropdownsExcept("remoteJobsOpen");
+    }
+    function sendSshReconnect(host) {
+        shell.sendShellMessage({
+            type: "widget_action", widget_id: "ssh-fleet",
+            action: "reconnect", data: { host: host }
+        });
     }
     function openProcessSniper() {
         shell.sendShellMessage({
@@ -193,7 +245,11 @@ Scope {
         "network": networkComponent,
         "notifications": notificationsComponent,
         "control-center": controlCenterComponent,
-        "system-tray": systemTrayComponent
+        "system-tray": systemTrayComponent,
+        "ssh-fleet": sshDashboardComponent,
+        "gpu-fleet": gpuDashboardComponent,
+        "remote-jobs": remoteJobsComponent,
+        "anki-due": ankiDueComponent
     })
 
     Component { id: workspaceIndicatorComponent; WorkspaceIndicator {} }
@@ -206,6 +262,10 @@ Scope {
     Component { id: notificationsComponent; NotificationsWidget {} }
     Component { id: controlCenterComponent; ControlCenterWidget {} }
     Component { id: systemTrayComponent; SystemTrayWidget {} }
+    Component { id: sshDashboardComponent; SshDashboard {} }
+    Component { id: gpuDashboardComponent; GpuDashboard {} }
+    Component { id: remoteJobsComponent; RemoteJobsWidget {} }
+    Component { id: ankiDueComponent; AnkiDueWidget {} }
 
     // ----------------------------------------------------------------------
     // Dispatch a parsed DaemonMessage into the state stores.
@@ -305,6 +365,10 @@ Scope {
         }
         case "duck_token": {
             shell.appendDuckToken(msg);
+            break;
+        }
+        case "nudge": {
+            shell.showNudge(msg);
             break;
         }
         case "critical_escalation": {
@@ -997,6 +1061,177 @@ Scope {
     }
 
     // ----------------------------------------------------------------------
+    // SSH fleet detail overlay (§2.10.1).
+    //
+    // Top-right dropdown anchored under the bar, opened from the
+    // `ssh-fleet` bar widget. Mirrors the notification-center / process-
+    // sniper overlay pattern. Reconnect rows route a widget_action to
+    // the daemon's ssh-monitor module via the M1.1 passthrough.
+    // ----------------------------------------------------------------------
+    PanelWindow {
+        id: sshFleetWindow
+
+        property bool isClosing: false
+        visible: shell.sshFleetOpen || isClosing
+
+        Connections {
+            target: shell
+            function onSshFleetOpenChanged() {
+                if (shell.sshFleetOpen) {
+                    sshFleetWindow.isClosing = false;
+                    sshFleetCloseTimer.stop();
+                } else if (sshFleetWindow.visible && !sshFleetWindow.isClosing) {
+                    sshFleetWindow.isClosing = true;
+                    sshFleetCloseTimer.restart();
+                }
+            }
+        }
+
+        Timer {
+            id: sshFleetCloseTimer
+            interval: Theme.motionSlow + 50
+            onTriggered: sshFleetWindow.isClosing = false
+        }
+
+        WlrLayershell.layer: WlrLayer.Overlay
+        WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+        WlrLayershell.namespace: "levshell-ssh-fleet"
+
+        BackgroundEffect.blurRegion: Region {
+            item: sshFleetPanel
+        }
+
+        anchors { top: true; left: true; right: true; bottom: true }
+        color: "transparent"
+
+        MouseArea {
+            anchors.fill: parent
+            onClicked: shell.sshFleetOpen = false
+        }
+
+        SshFleetPanel {
+            id: sshFleetPanel
+            anchors.right: parent.right
+            anchors.rightMargin: Theme.spaceLg
+            anchors.top: parent.top
+            anchors.topMargin: Theme.barHeight + Theme.spaceSm
+            isOpen: shell.sshFleetOpen
+            payload: shell.stateFor("ssh-fleet") || ({ hosts: [] })
+            onReconnect: (host) => shell.sendSshReconnect(host)
+        }
+    }
+
+    // ----------------------------------------------------------------------
+    // GPU fleet detail overlay (§2.10.4). Monitor-only — no actions.
+    // ----------------------------------------------------------------------
+    PanelWindow {
+        id: gpuFleetWindow
+
+        property bool isClosing: false
+        visible: shell.gpuFleetOpen || isClosing
+
+        Connections {
+            target: shell
+            function onGpuFleetOpenChanged() {
+                if (shell.gpuFleetOpen) {
+                    gpuFleetWindow.isClosing = false;
+                    gpuFleetCloseTimer.stop();
+                } else if (gpuFleetWindow.visible && !gpuFleetWindow.isClosing) {
+                    gpuFleetWindow.isClosing = true;
+                    gpuFleetCloseTimer.restart();
+                }
+            }
+        }
+
+        Timer {
+            id: gpuFleetCloseTimer
+            interval: Theme.motionSlow + 50
+            onTriggered: gpuFleetWindow.isClosing = false
+        }
+
+        WlrLayershell.layer: WlrLayer.Overlay
+        WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+        WlrLayershell.namespace: "levshell-gpu-fleet"
+
+        BackgroundEffect.blurRegion: Region {
+            item: gpuFleetPanel
+        }
+
+        anchors { top: true; left: true; right: true; bottom: true }
+        color: "transparent"
+
+        MouseArea {
+            anchors.fill: parent
+            onClicked: shell.gpuFleetOpen = false
+        }
+
+        GpuFleetPanel {
+            id: gpuFleetPanel
+            anchors.right: parent.right
+            anchors.rightMargin: Theme.spaceLg
+            anchors.top: parent.top
+            anchors.topMargin: Theme.barHeight + Theme.spaceSm
+            isOpen: shell.gpuFleetOpen
+            payload: shell.stateFor("gpu-fleet") || ({ hosts: [] })
+        }
+    }
+
+    // ----------------------------------------------------------------------
+    // Remote jobs detail overlay (§2.10.3). Monitor-only — no actions.
+    // ----------------------------------------------------------------------
+    PanelWindow {
+        id: remoteJobsWindow
+
+        property bool isClosing: false
+        visible: shell.remoteJobsOpen || isClosing
+
+        Connections {
+            target: shell
+            function onRemoteJobsOpenChanged() {
+                if (shell.remoteJobsOpen) {
+                    remoteJobsWindow.isClosing = false;
+                    remoteJobsCloseTimer.stop();
+                } else if (remoteJobsWindow.visible && !remoteJobsWindow.isClosing) {
+                    remoteJobsWindow.isClosing = true;
+                    remoteJobsCloseTimer.restart();
+                }
+            }
+        }
+
+        Timer {
+            id: remoteJobsCloseTimer
+            interval: Theme.motionSlow + 50
+            onTriggered: remoteJobsWindow.isClosing = false
+        }
+
+        WlrLayershell.layer: WlrLayer.Overlay
+        WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+        WlrLayershell.namespace: "levshell-remote-jobs"
+
+        BackgroundEffect.blurRegion: Region {
+            item: remoteJobsPanel
+        }
+
+        anchors { top: true; left: true; right: true; bottom: true }
+        color: "transparent"
+
+        MouseArea {
+            anchors.fill: parent
+            onClicked: shell.remoteJobsOpen = false
+        }
+
+        RemoteJobsPanel {
+            id: remoteJobsPanel
+            anchors.right: parent.right
+            anchors.rightMargin: Theme.spaceLg
+            anchors.top: parent.top
+            anchors.topMargin: Theme.barHeight + Theme.spaceSm
+            isOpen: shell.remoteJobsOpen
+            payload: shell.stateFor("remote-jobs") || ({ hosts: [] })
+        }
+    }
+
+    // ----------------------------------------------------------------------
     // Warmup overlay (§2.12.1).
     //
     // Centered card fired on first activity after a ≥4h gap, or via
@@ -1110,6 +1345,89 @@ Scope {
             streaming: shell.duckStreaming
             onDismissed: shell.duckOpen = false
             onSubmit: (text) => shell.sendDuckMessage(text)
+        }
+    }
+
+    // ----------------------------------------------------------------------
+    // Ideation nudge toast (§2.9.2).
+    //
+    // Non-modal, keyboard-transparent, top-center under the bar. Fades
+    // in/out via the inner card opacity; the PanelWindow lingers through
+    // the fade-out so the animation isn't clipped.
+    // ----------------------------------------------------------------------
+    PanelWindow {
+        id: nudgeWindow
+        visible: shell.nudgeVisible || nudgeCard.opacity > 0.01
+
+        WlrLayershell.layer: WlrLayer.Overlay
+        WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+        WlrLayershell.namespace: "levshell-nudge"
+
+        anchors { top: true; left: true; right: true; bottom: true }
+        color: "transparent"
+        // Click-through everywhere except the card itself.
+        mask: Region { item: nudgeCard }
+
+        BackgroundEffect.blurRegion: Region { item: nudgeCard }
+
+        Rectangle {
+            id: nudgeCard
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.top: parent.top
+            anchors.topMargin: Theme.barHeight + Theme.spaceMd
+
+            implicitWidth: nudgeCol.implicitWidth + 2 * Theme.panelInnerPadding
+            implicitHeight: nudgeCol.implicitHeight + 2 * Theme.panelInnerPadding
+
+            color: Qt.rgba(Theme.surface.r, Theme.surface.g, Theme.surface.b,
+                           Theme.onBattery ? Theme.panelOpacityBattery : Theme.panelOpacity)
+            radius: Theme.panelCornerRadius
+            border.width: Theme.panelBorderWidth
+            border.color: Theme.outline
+            antialiasing: true
+
+            opacity: shell.nudgeVisible ? 1.0 : 0.0
+            Behavior on opacity {
+                NumberAnimation { duration: Theme.motionNormal; easing.type: Easing.OutCubic }
+            }
+
+            Row {
+                id: nudgeCol
+                anchors.centerIn: parent
+                spacing: Theme.spaceSm
+
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: Theme.iconNote
+                    color: Theme.primary
+                    font.family: Theme.fontIcon
+                    font.pixelSize: Theme.iconSize
+                }
+                Column {
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: 1
+                    Text {
+                        text: (shell.currentNudge.kind || "nudge").replace(/_/g, " ")
+                        color: Theme.fgMuted
+                        font.family: Theme.fontText
+                        font.pixelSize: Theme.typeCaption
+                        font.capitalization: Font.Capitalize
+                    }
+                    Text {
+                        text: shell.currentNudge.title || ""
+                        color: Theme.fg
+                        font.family: Theme.fontText
+                        font.pixelSize: Theme.typeBody
+                        font.weight: Theme.typeBodyEmphasisWeight
+                    }
+                }
+            }
+
+            MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: shell.nudgeVisible = false
+            }
         }
     }
 
