@@ -23,3 +23,4 @@ RemoteJobsWidget 1.0 RemoteJobsWidget.qml
 RemoteJobsPanel 1.0 RemoteJobsPanel.qml
 SshDashboard 1.0 SshDashboard.qml
 SshFleetPanel 1.0 SshFleetPanel.qml
+SessionTimerWidget 1.0 SessionTimerWidget.qml
