@@ -1,0 +1,21 @@
+# Example host file. Copy to ~/.config/levshell/hosts/<name>.toml.
+# Each file is one host. With no host files the SSH / GPU / remote-jobs
+# triad is dormant (produces no widgets) by design.
+#
+# roles: any of "ssh_monitor" (reachability+latency),
+#                "gpu"         (nvidia-smi dashboard),
+#                "jobs"        (SLURM squeue monitor)
+# Empty roles = dormant.
+
+name = "lab-gpu"
+hostname = "gpu.cluster.example.edu"
+user = "you"
+port = 22
+display_name = "Lab GPU Cluster"
+project = "Example Project"        # name from config/projects/*.toml
+poll_interval_secs = 30
+connect_timeout_secs = 5
+roles = ["ssh_monitor", "gpu", "jobs"]
+
+# Use hostname = "localhost" with no user/port to monitor THIS machine's
+# own nvidia-smi without ssh.

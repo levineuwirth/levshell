@@ -1,0 +1,20 @@
+# Example project file. Copy to ~/.config/levshell/projects/<name>.toml
+# and edit. `name` is required; everything else is optional.
+#
+# status: active | simmering | blocked | writing_up | complete
+
+name = "Example Project"
+status = "active"
+description = "What this research thread is about."
+
+# The ideation engine draws nudges from these.
+open_questions = [
+  "The smallest concrete next step is…?",
+  "What assumption hasn't been validated yet?",
+]
+
+tags = ["example"]
+git_repos = ["/home/you/Repos/example"]
+ssh_hosts = ["lab-gpu"]          # names from config/hosts/*.toml
+workspace_names = ["3"]
+accent_color = "#7aa2f7"

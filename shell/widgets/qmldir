@@ -6,6 +6,10 @@ MemoryWidget 1.0 MemoryWidget.qml
 BatteryWidget 1.0 BatteryWidget.qml
 NetworkWidget 1.0 NetworkWidget.qml
 NotificationsWidget 1.0 NotificationsWidget.qml
+ControlCenterWidget 1.0 ControlCenterWidget.qml
+Sparkline 1.0 Sparkline.qml
+ProcessSniper 1.0 ProcessSniper.qml
+SystemTrayWidget 1.0 SystemTrayWidget.qml
 CommandPalette 1.0 CommandPalette.qml
 NotificationCenter 1.0 NotificationCenter.qml
 ClockHub 1.0 ClockHub.qml

@@ -25,7 +25,8 @@ pub use handshake::{
     PROTOCOL_VERSION,
 };
 pub use messages::{
-    BarDensity, BarDensityState, BarLayout, CommandPaletteQuery, CommandPaletteSelect,
+    BarDensity, BarDensityState, BarLayout, ClockHubPayload, CommandPaletteQuery,
+    CommandPaletteSelect, ProcInfo, ProcessListPayload,
     CriticalEscalation, DaemonMessage, DensityChange, DuckSay, DuckToken, EscalationLevel,
     PowerState, Prominence, ShellMessage, ThemeBar, ThemeColors, ThemeHealth, ThemeIcons,
     ThemePayload, ThemeTypography, WarmupEvent, WarmupPayload, WarmupProject, WidgetAction,

@@ -7,6 +7,7 @@
 //! publish an initial value immediately rather than waiting for the first
 //! tick.
 
+use std::collections::VecDeque;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -43,7 +44,15 @@ pub struct MemoryState {
     pub available_kb: u64,
     pub used_kb: u64,
     pub used_percent: f64,
+    /// Rolling used-percent samples, oldest first. Drives the widget
+    /// sparkline (spec §2.3.1). Empty from the pure parser; the module
+    /// fills it from its own ring buffer before publishing.
+    #[serde(default)]
+    pub history: Vec<f64>,
 }
+
+/// Sparkline window — see the cpu module's identical constant.
+const HISTORY_LEN: usize = 60;
 
 impl MemoryState {
     /// Parse `/proc/meminfo` text into a [`MemoryState`]. Ignores lines
@@ -84,6 +93,7 @@ impl MemoryState {
             available_kb,
             used_kb,
             used_percent,
+            history: Vec::new(),
         })
     }
 }
@@ -92,6 +102,7 @@ pub struct MemoryModule {
     bus: EventBus,
     publisher: WidgetPublisher,
     escalation: EscalationTracker,
+    history: VecDeque<f64>,
 }
 
 impl MemoryModule {
@@ -100,7 +111,19 @@ impl MemoryModule {
             bus,
             publisher,
             escalation: EscalationTracker::new(),
+            history: VecDeque::with_capacity(HISTORY_LEN),
         }
+    }
+
+    /// Push the latest used-percent into the ring buffer, attach the
+    /// full window to the state, and publish. Shared by start/tick.
+    fn record_and_publish(&mut self, mut state: MemoryState) {
+        if self.history.len() == HISTORY_LEN {
+            self.history.pop_front();
+        }
+        self.history.push_back(state.used_percent);
+        state.history = self.history.iter().copied().collect();
+        self.publish(state);
     }
 
     fn read_state() -> ModuleResult<MemoryState> {
@@ -160,13 +183,13 @@ impl Module for MemoryModule {
 
     async fn start(&mut self) -> ModuleResult<()> {
         let state = Self::read_state()?;
-        self.publish(state);
+        self.record_and_publish(state);
         Ok(())
     }
 
     async fn tick(&mut self) -> ModuleResult<()> {
         let state = Self::read_state()?;
-        self.publish(state);
+        self.record_and_publish(state);
         Ok(())
     }
 }

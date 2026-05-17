@@ -5,7 +5,8 @@
 //     "total_kb": 61341412,
 //     "available_kb": 49607908,
 //     "used_kb": 11733504,
-//     "used_percent": 19.128
+//     "used_percent": 19.128,
+//     "history": [18.0, ...]
 //   }
 
 import QtQuick
@@ -19,6 +20,7 @@ WidgetWrapper {
     readonly property real usedPercent: (widgetState && widgetState.used_percent) || 0
     readonly property real totalGb: ((widgetState && widgetState.total_kb) || 0) / 1024.0 / 1024.0
     readonly property real usedGb: ((widgetState && widgetState.used_kb) || 0) / 1024.0 / 1024.0
+    readonly property var history: (widgetState && widgetState.history) || []
 
     Row {
         anchors.verticalCenter: parent.verticalCenter
@@ -31,6 +33,16 @@ WidgetWrapper {
             color: root.contentColor
             font.family:    Theme.fontIcon
             font.pixelSize: Theme.iconSize
+        }
+
+        Sparkline {
+            anchors.verticalCenter: parent.verticalCenter
+            height: Theme.iconSize
+            width: 40
+            values: root.history
+            maxValue: 100
+            lineColor: root.accentColor
+            visible: root.prominence === "visible" || root.prominence === "expanded"
         }
 
         Text {

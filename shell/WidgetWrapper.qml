@@ -58,6 +58,16 @@ Item {
     // "critical". Default "ambient" renders exactly as pre-§9 widgets.
     property string escalation: "ambient"
 
+    // Opt-in click affordance (spec §7.1). When true, the wrapper renders
+    // a full-bleed hover wash *behind* the content and a click target
+    // *above* it, and emits `clicked()`. This chrome lives on `root`, not
+    // in `contentHolder`, so it never enters the `childrenRect`
+    // measurement that drives `targetWidth` — keeping that binding
+    // loop-free even for interactive widgets. Widgets must NOT inject
+    // their own full-bleed MouseArea into the content slot.
+    property bool interactive: false
+    signal clicked()
+
     // Default content slot — widgets assign children that get parented
     // to `contentHolder`. This keeps the health chrome (pill + status
     // icon) outside the widget's layout so they don't collide with it.
@@ -136,6 +146,22 @@ Item {
             duration: Theme.motionFast
             easing.type: Easing.OutCubic
         }
+    }
+
+    // -----------------------------------------------------------------
+    // Interactive hover wash — §7.1 click affordance, channel 1.
+    //
+    // Sits *below* contentHolder (declared first) so the wash renders
+    // behind text/icons. Fills `root`, not `contentHolder`, so it stays
+    // out of the width measurement.
+    // -----------------------------------------------------------------
+    Rectangle {
+        anchors.fill: parent
+        radius: 4
+        color: Theme.fg
+        visible: root.interactive
+        opacity: root.interactive && clickArea.containsMouse ? 0.06 : 0.0
+        Behavior on opacity { NumberAnimation { duration: Theme.motionFast } }
     }
 
     // -----------------------------------------------------------------
@@ -266,5 +292,20 @@ Item {
         color: root.status === "stale" ? Theme.stalePill : Theme.errorPill
         font.family:    Theme.fontIcon
         font.pixelSize: Theme.statusIconSize
+    }
+
+    // -----------------------------------------------------------------
+    // Click target — §7.1. Declared last so it sits above all content
+    // and chrome. Fills `root`, so (like the hover wash) it is never
+    // measured by `targetWidth`. Disabled when not interactive so it
+    // neither captures events nor changes the cursor.
+    // -----------------------------------------------------------------
+    MouseArea {
+        id: clickArea
+        anchors.fill: parent
+        enabled: root.interactive
+        hoverEnabled: root.interactive
+        cursorShape: Qt.PointingHandCursor
+        onClicked: root.clicked()
     }
 }

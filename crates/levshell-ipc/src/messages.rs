@@ -64,6 +64,16 @@ pub enum DaemonMessage {
     /// `escalation` field on [`WidgetUpdate`]; this message is the
     /// separate out-of-band alert.
     CriticalEscalation(CriticalEscalation),
+    /// Upcoming-events feed for the clock/calendar hub (spec §2.1.5).
+    /// Pushed periodically by the `clock` module from `DataStore`
+    /// events (CalDAV-synced or otherwise). The shell renders the
+    /// dropdown's upcoming list + next-event countdown from this.
+    /// Boxed for the same small-enum reason as [`Self::Theme`].
+    ClockHub(Box<ClockHubPayload>),
+    /// Top resource-consuming processes for the CPU widget's process
+    /// sniper (spec §2.3.5). Pushed in response to the user opening the
+    /// sniper; the shell renders a kill list.
+    ProcessList(Box<ProcessListPayload>),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -397,4 +407,45 @@ pub struct WarmupProject {
     /// start.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idle_secs: Option<u64>,
+}
+
+// ---------------------------------------------------------------------------
+// Clock / calendar hub feed (spec §2.1.5)
+// ---------------------------------------------------------------------------
+
+/// Upcoming events for the clock dropdown. Reuses [`WarmupEvent`] for
+/// the per-event shape (title + RFC 3339 start/end + optional location)
+/// since the calendar projection is identical. `events` is ordered by
+/// `start_at` ascending; the shell derives the next-event countdown
+/// from the first entry whose `start_at` is still in the future.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClockHubPayload {
+    /// RFC 3339 UTC of when the daemon built this snapshot.
+    pub generated_at: String,
+    /// Upcoming events within the lookahead window, soonest first.
+    pub events: Vec<WarmupEvent>,
+}
+
+// ---------------------------------------------------------------------------
+// Process sniper (spec §2.3.5)
+// ---------------------------------------------------------------------------
+
+/// One process row in the sniper list.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProcInfo {
+    pub pid: i32,
+    pub name: String,
+    /// Approximate CPU usage over the sniper's sampling window, percent
+    /// of one core (can exceed 100 on multi-threaded processes).
+    pub cpu_percent: f64,
+    /// Resident set size in KiB.
+    pub mem_kb: u64,
+}
+
+/// Snapshot of the top resource-consuming processes, CPU-desc.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProcessListPayload {
+    /// RFC 3339 UTC of when the daemon sampled.
+    pub generated_at: String,
+    pub processes: Vec<ProcInfo>,
 }

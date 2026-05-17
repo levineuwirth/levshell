@@ -5,6 +5,7 @@
 //! struct + delta math lives outside the module so the unit tests can
 //! exercise it without touching the filesystem.
 
+use std::collections::VecDeque;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -121,7 +122,15 @@ impl CpuSample {
 pub struct CpuState {
     pub usage_percent: f64,
     pub load_avg_1: Option<f64>,
+    /// Rolling usage-percent samples, oldest first, newest last. Drives
+    /// the widget's sparkline (spec §2.3.1). Capped at [`HISTORY_LEN`].
+    #[serde(default)]
+    pub history: Vec<f64>,
 }
+
+/// Sparkline window: at the 2s telemetry tick this is ~2 minutes of
+/// history — enough to read a trend without unbounded growth.
+const HISTORY_LEN: usize = 60;
 
 fn read_load_avg_1() -> Option<f64> {
     let text = std::fs::read_to_string("/proc/loadavg").ok()?;
@@ -133,6 +142,7 @@ pub struct CpuModule {
     publisher: WidgetPublisher,
     last_sample: Option<CpuSample>,
     escalation: EscalationTracker,
+    history: VecDeque<f64>,
 }
 
 impl CpuModule {
@@ -142,6 +152,7 @@ impl CpuModule {
             publisher,
             last_sample: None,
             escalation: EscalationTracker::new(),
+            history: VecDeque::with_capacity(HISTORY_LEN),
         }
     }
 
@@ -209,9 +220,14 @@ impl Module for CpuModule {
         let sample = Self::read_sample()?;
         if let Some(prev) = self.last_sample.as_ref() {
             let usage = sample.usage_percent(prev);
+            if self.history.len() == HISTORY_LEN {
+                self.history.pop_front();
+            }
+            self.history.push_back(usage);
             self.publish(CpuState {
                 usage_percent: usage,
                 load_avg_1: read_load_avg_1(),
+                history: self.history.iter().copied().collect(),
             });
         }
         self.last_sample = Some(sample);

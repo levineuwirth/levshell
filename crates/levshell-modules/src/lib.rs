@@ -10,7 +10,9 @@
 
 #![forbid(unsafe_code)]
 
+pub mod clock;
 pub mod context_engine;
+pub mod proc_sniper;
 pub mod context_snapshot;
 pub mod escalation;
 pub mod focus;
@@ -25,7 +27,11 @@ pub mod sway;
 pub mod telemetry;
 pub mod theme;
 
-pub use context_engine::{default_context_engine, default_widgets, ContextEngineModule};
+pub use clock::ClockModule;
+pub use proc_sniper::ProcessSniperModule;
+pub use context_engine::{
+    default_context_engine, default_widgets, primary_output_width, ContextEngineModule,
+};
 pub use context_snapshot::{
     default_contexts_dir, delete_snapshot, list_snapshots, restore_snapshot, save_current,
     ContextSnapshot, ContextSnapshotError, OperationSummary, WindowSnapshot,
@@ -58,7 +64,8 @@ pub use warmup::{
 };
 pub use palette::{
     AppLauncherProvider, NoteSearchProvider, PaletteItem, PaletteModule, PaletteProvider,
-    PaletteState, WorkspaceSwitcherProvider, PALETTE_WIDGET_ID, PALETTE_WIDGET_TYPE,
+    PaletteState, WorkspaceSwitcherProvider, sway_switch_workspace, PALETTE_WIDGET_ID,
+    PALETTE_WIDGET_TYPE,
 };
 pub use sway::{
     SwayWorkspaceModule, WorkspaceIndicatorState, WorkspaceInfo, WORKSPACE_WIDGET_ID,

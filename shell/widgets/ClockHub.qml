@@ -1,9 +1,10 @@
-// ClockHub — clock & calendar dropdown scaffold (§2.1.5).
+// ClockHub — clock & calendar dropdown (§2.1.5).
 //
-// Phase 1 scaffold: shows today's date, a placeholder calendar grid,
-// and a stub for upcoming events. Full implementation (CalDAV sync,
-// world-clock row, countdown timer) lands in Phase 2 when the sync
-// adapter framework is available.
+// Calendar grid is local-date derived (no daemon round-trip needed for
+// a month grid). Upcoming events + the next-event countdown are fed
+// live by the daemon's `clock` module via DaemonMessage::ClockHub
+// (`payload`), sourced from the unified store (CalDAV-synced or any
+// other event source). World-clock row remains future work.
 
 import QtQuick
 import QtQuick.Effects
@@ -13,6 +14,52 @@ Rectangle {
     id: root
 
     property bool isOpen: false
+
+    // Live upcoming-events feed (DaemonMessage::ClockHub). events[] is
+    // ordered soonest-first; each has title, start_at, end_at (RFC 3339
+    // UTC), optional location.
+    property var payload: ({ generated_at: "", events: [] })
+    readonly property var events: payload && payload.events ? payload.events : []
+
+    // Ticks every 30s so the countdown stays current while the hub is
+    // open without a per-second timer.
+    property double nowMs: Date.now()
+    Timer {
+        interval: 30000
+        running: root.isOpen
+        repeat: true
+        onTriggered: root.nowMs = Date.now()
+    }
+    onIsOpenChanged: if (isOpen) nowMs = Date.now()
+
+    // First event that hasn't started yet, for the countdown line.
+    readonly property var nextEvent: {
+        for (let i = 0; i < events.length; i++) {
+            const t = Date.parse(events[i].start_at);
+            if (!isNaN(t) && t > nowMs) return events[i];
+        }
+        return null;
+    }
+
+    function fmtTime(iso) {
+        const d = new Date(iso);
+        if (isNaN(d.getTime())) return "";
+        return Qt.formatDateTime(d, "ddd HH:mm");
+    }
+
+    // Compact "in 2h 15m" / "in 6m" / "now" relative label.
+    function fmtCountdown(iso) {
+        const t = Date.parse(iso);
+        if (isNaN(t)) return "";
+        let mins = Math.round((t - nowMs) / 60000);
+        if (mins <= 0) return "now";
+        if (mins < 60) return "in " + mins + "m";
+        const h = Math.floor(mins / 60);
+        const m = mins % 60;
+        if (h < 24) return "in " + h + "h" + (m > 0 ? " " + m + "m" : "");
+        const days = Math.floor(h / 24);
+        return "in " + days + "d";
+    }
 
     // Current date for the calendar header.
     readonly property var now: new Date()
@@ -152,13 +199,86 @@ Rectangle {
         // Divider.
         Rectangle { width: parent.width; height: 1; color: Theme.outline; opacity: 0.5 }
 
-        // Upcoming events placeholder.
+        // Upcoming section header + next-event countdown.
+        Row {
+            width: parent.width
+            Text {
+                text: "Upcoming"
+                color: Theme.fgSubtle
+                font.family: Theme.fontText
+                font.pixelSize: Theme.typeCaption
+                font.weight: Theme.typeLabelWeight
+                font.capitalization: Font.AllUppercase
+            }
+            Item { width: parent.width - 1; height: 1 } // spacer
+        }
+
         Text {
+            visible: root.nextEvent !== null
+            width: parent.width
+            elide: Text.ElideRight
+            text: root.nextEvent
+                  ? root.nextEvent.title + " · " + root.fmtCountdown(root.nextEvent.start_at)
+                  : ""
+            color: Theme.primary
+            font.family: Theme.fontText
+            font.pixelSize: Theme.typeCaption
+            font.weight: Theme.typeBodyEmphasisWeight
+        }
+
+        // Empty state.
+        Text {
+            visible: root.events.length === 0
             text: "no upcoming events"
             color: Theme.fgMuted
             font.family: Theme.fontText
             font.pixelSize: Theme.typeCaption
             font.italic: true
+        }
+
+        // Upcoming list (cap at 6 rows for the dropdown).
+        Column {
+            width: parent.width
+            spacing: Theme.spaceSm
+            Repeater {
+                model: Math.min(root.events.length, 6)
+                delegate: Row {
+                    required property int index
+                    readonly property var ev: root.events[index]
+                    width: parent.width
+                    spacing: Theme.spaceMd
+
+                    Text {
+                        width: 84
+                        text: root.fmtTime(ev.start_at)
+                        color: Theme.fgSubtle
+                        font.family: Theme.fontMono
+                        font.pixelSize: Theme.typeCaption
+                        font.features: ({ "tnum": 1 })
+                    }
+                    Column {
+                        width: parent.width - 84 - Theme.spaceMd
+                        Text {
+                            width: parent.width
+                            elide: Text.ElideRight
+                            text: ev.title
+                            color: Theme.fg
+                            font.family: Theme.fontText
+                            font.pixelSize: Theme.typeCaption
+                        }
+                        Text {
+                            width: parent.width
+                            elide: Text.ElideRight
+                            visible: !!ev.location
+                            text: ev.location || ""
+                            color: Theme.fgMuted
+                            font.family: Theme.fontText
+                            font.pixelSize: Theme.typeCaption
+                            font.italic: true
+                        }
+                    }
+                }
+            }
         }
     }
 }

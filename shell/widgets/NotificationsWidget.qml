@@ -15,8 +15,19 @@ WidgetWrapper {
     // trackedNotifications is a Quickshell UntypedObjectModel: no `count`
     // property — its public iterable is `values` (QObjectList, JS-array-
     // shaped). The previous `.count` binding was always `undefined → 0`.
-    readonly property int unreadCount:
-        notifServer ? notifServer.trackedNotifications.values.length : 0
+    // Notifications that arrived while Do-Not-Disturb was active are
+    // still persisted (reviewable in the center) but excluded from the
+    // unread badge — that exclusion is what "DnD silences" means here,
+    // since this shell has no popup/sound surface to suppress.
+    readonly property int unreadCount: {
+        if (!notifServer) return 0;
+        const vals = notifServer.trackedNotifications.values;
+        const muted = shell.mutedNotifIds || ({});
+        let n = 0;
+        for (let i = 0; i < vals.length; i++)
+            if (!muted[vals[i].id]) n++;
+        return n;
+    }
 
     readonly property bool dnd: shell.doNotDisturb
 
@@ -29,23 +40,8 @@ WidgetWrapper {
         return Theme.fgMuted;
     }
 
-    MouseArea {
-        id: clickArea
-        anchors.fill: parent
-        z: 10
-        hoverEnabled: true
-        cursorShape: Qt.PointingHandCursor
-        onClicked: shell.toggleNotificationCenter()
-    }
-
-    Rectangle {
-        anchors.fill: parent
-        radius: 4
-        color: Theme.fg
-        opacity: clickArea.containsMouse ? 0.06 : 0.0
-        z: -1
-        Behavior on opacity { NumberAnimation { duration: Theme.motionFast } }
-    }
+    interactive: true
+    onClicked: shell.toggleNotificationCenter()
 
     Row {
         anchors.verticalCenter: parent.verticalCenter

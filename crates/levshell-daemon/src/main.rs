@@ -12,6 +12,7 @@ use levshell_config::{load_profiles_from_dir, spawn_profile_watcher};
 use levshell_daemon::{init_tracing, run_with_sync, DaemonConfig, ModuleFactory, SyncAdapterFactory};
 use levshell_modules::{
     default_context_engine, default_warmup_state_path, AppLauncherProvider, BatteryModule,
+    ClockModule, ProcessSniperModule,
     CpuModule, FocusModeModule, GpuDashboardModule, HostRegistry, IdeationModule,
     InterruptionCostModule, MemoryModule, NetworkModule, NotificationsModule, NoteSearchProvider,
     PaletteModule, PaletteProvider, RemoteJobsModule, RemoteRunner, RubberDuckConfig,
@@ -157,6 +158,15 @@ async fn main() -> Result<()> {
         }
     };
 
+    // Resolve the real layout pixel budget from sway once at startup
+    // (monitor geometry rarely changes mid-session). Falls back to the
+    // context engine's built-in default if sway is unreachable.
+    let screen_width = levshell_modules::primary_output_width().await;
+    match screen_width {
+        Some(w) => tracing::info!(width = w, "context engine: real output width"),
+        None => tracing::warn!("context engine: sway outputs unavailable; using default width"),
+    }
+
     let factory: ModuleFactory = {
         let shared_profiles = shared_profiles.clone();
         let ideation_config = ideation_config.clone();
@@ -165,8 +175,14 @@ async fn main() -> Result<()> {
         let warmup_state_path = warmup_state_path.clone();
         let rubber_duck_config = rubber_duck_config.clone();
         Box::new(move |bus, publisher, store, projects| {
-            let context_engine = default_context_engine(publisher.clone())
-                .with_shared_profiles(shared_profiles.clone());
+            let context_engine = {
+                let ce = default_context_engine(publisher.clone())
+                    .with_shared_profiles(shared_profiles.clone());
+                match screen_width {
+                    Some(w) => ce.with_available_width(w),
+                    None => ce,
+                }
+            };
             let focus_mode = FocusModeModule::new(bus.clone(), shared_profiles);
             let palette_providers: Vec<Box<dyn PaletteProvider>> = vec![
                 Box::new(AppLauncherProvider::new()),
@@ -182,6 +198,10 @@ async fn main() -> Result<()> {
                 projects.clone(),
                 ideation_config,
             );
+            // Constructed before `store` is moved into warmup / before
+            // `publisher` is moved into NetworkModule in the vec below.
+            let clock = ClockModule::new(store.clone(), publisher.clone());
+            let proc_sniper = ProcessSniperModule::new(publisher.clone());
             let warmup = WarmupModule::with_config(
                 publisher.clone(),
                 store,
@@ -230,6 +250,8 @@ async fn main() -> Result<()> {
                 Box::new(NetworkModule::new(publisher)) as Box<dyn levshell_core::Module>,
                 Box::new(palette) as Box<dyn levshell_core::Module>,
                 Box::new(ideation) as Box<dyn levshell_core::Module>,
+                Box::new(clock) as Box<dyn levshell_core::Module>,
+                Box::new(proc_sniper) as Box<dyn levshell_core::Module>,
                 Box::new(warmup) as Box<dyn levshell_core::Module>,
                 Box::new(rubber_duck) as Box<dyn levshell_core::Module>,
                 Box::new(notifications) as Box<dyn levshell_core::Module>,
@@ -488,11 +510,36 @@ async fn main() -> Result<()> {
         })
     };
 
+    // Shut down on either SIGINT (ctrl-c, interactive use) or SIGTERM
+    // (sway killing its `exec` children on session exit, systemd stop).
+    // Both must resolve the shutdown future so `run_with_sync` returns
+    // and `IpcServer::drop` unlinks the socket — otherwise SIGTERM kills
+    // the process before Drop runs and leaves a stale socket behind.
     let shutdown: Pin<Box<dyn std::future::Future<Output = ()> + Send>> = Box::pin(async {
-        if let Err(e) = tokio::signal::ctrl_c().await {
-            tracing::error!(error = %e, "failed to install ctrl_c handler");
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut sigterm) => {
+                tokio::select! {
+                    r = tokio::signal::ctrl_c() => {
+                        if let Err(e) = r {
+                            tracing::error!(error = %e, "failed to install ctrl_c handler");
+                        }
+                        tracing::info!("SIGINT received; shutting down");
+                    }
+                    _ = sigterm.recv() => {
+                        tracing::info!("SIGTERM received; shutting down");
+                    }
+                }
+            }
+            Err(e) => {
+                // SIGTERM handler unavailable — degrade to ctrl-c only
+                // rather than refusing to start.
+                tracing::error!(error = %e, "failed to install SIGTERM handler; ctrl-c only");
+                if let Err(e) = tokio::signal::ctrl_c().await {
+                    tracing::error!(error = %e, "failed to install ctrl_c handler");
+                }
+                tracing::info!("SIGINT received; shutting down");
+            }
         }
-        tracing::info!("ctrl-c received");
     });
 
     run_with_sync(config, factory, Some(sync_factory), shutdown).await

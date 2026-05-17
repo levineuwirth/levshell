@@ -47,23 +47,8 @@ WidgetWrapper {
         text: "00:00:00"
     }
 
-    MouseArea {
-        id: clickArea
-        anchors.fill: parent
-        z: 10
-        hoverEnabled: true
-        cursorShape: Qt.PointingHandCursor
-        onClicked: shell.toggleClockHub()
-    }
-
-    Rectangle {
-        anchors.fill: parent
-        radius: 4
-        color: Theme.fg
-        opacity: clickArea.containsMouse ? 0.06 : 0.0
-        z: -1
-        Behavior on opacity { NumberAnimation { duration: Theme.motionFast } }
-    }
+    interactive: true
+    onClicked: shell.toggleClockHub()
 
     Timer {
         interval: 1000
@@ -73,7 +58,12 @@ WidgetWrapper {
     }
 
     Column {
-        anchors.horizontalCenter: parent.horizontalCenter
+        // Left-anchored (not horizontalCenter) per the WidgetWrapper
+        // measurement contract: a centered child's x tracks
+        // contentHolder.width, which closes a targetWidth binding loop.
+        // The container hugs content width, so this is visually identical
+        // to centering. The two Texts still center within this column.
+        anchors.left: parent.left
         anchors.verticalCenter: parent.verticalCenter
         // Pinned to the time-string metric so this column's width is
         // stable regardless of date-font subpixel variance. The two

@@ -194,6 +194,18 @@ pub enum Event {
         title: String,
         body: String,
     },
+
+    /// The CPU widget's process sniper was opened (spec §2.3.5). A
+    /// sniper module enumerates the top resource-consuming processes
+    /// and answers with `DaemonMessage::ProcessList`.
+    ProcessListRequested,
+
+    /// Send `signal` (e.g. `"TERM"`, `"KILL"`) to `pid` — the sniper's
+    /// one-click / shift-click kill action.
+    ProcessKillRequested {
+        pid: i32,
+        signal: String,
+    },
 }
 
 /// A discriminant for filtering subscriptions without instantiating an [`Event`].
@@ -220,6 +232,8 @@ pub enum EventKind {
     DuckActionRequested,
     DuckUserMessage,
     CriticalEscalation,
+    ProcessListRequested,
+    ProcessKillRequested,
 }
 
 impl Event {
@@ -245,6 +259,8 @@ impl Event {
             Event::DuckActionRequested { .. } => EventKind::DuckActionRequested,
             Event::DuckUserMessage { .. } => EventKind::DuckUserMessage,
             Event::CriticalEscalation { .. } => EventKind::CriticalEscalation,
+            Event::ProcessListRequested => EventKind::ProcessListRequested,
+            Event::ProcessKillRequested { .. } => EventKind::ProcessKillRequested,
         }
     }
 }

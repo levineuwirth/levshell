@@ -38,7 +38,8 @@ enum Command {
     /// Print a health snapshot of the running daemon.
     Status,
 
-    /// Request a bar-density change.
+    /// Request a bar-density change. `cycle` advances
+    /// full -> compact -> hidden -> full server-side.
     Density {
         #[arg(value_enum)]
         mode: CliDensity,
@@ -200,6 +201,8 @@ enum CliDensity {
     Full,
     Compact,
     Hidden,
+    /// Advance to the next density server-side (full -> compact -> hidden -> full).
+    Cycle,
 }
 
 impl From<CliDensity> for BarDensity {
@@ -208,6 +211,9 @@ impl From<CliDensity> for BarDensity {
             CliDensity::Full => BarDensity::Full,
             CliDensity::Compact => BarDensity::Compact,
             CliDensity::Hidden => BarDensity::Hidden,
+            // `Cycle` is dispatched to CtlRequest::DensityCycle in
+            // build_request and never reaches this conversion.
+            CliDensity::Cycle => unreachable!("cycle is handled before .into()"),
         }
     }
 }
@@ -301,7 +307,10 @@ fn build_request(cmd: Command) -> CtlRequest {
     match cmd {
         Command::Ping => CtlRequest::Ping,
         Command::Status => CtlRequest::Status,
-        Command::Density { mode } => CtlRequest::Density { mode: mode.into() },
+        Command::Density { mode } => match mode {
+            CliDensity::Cycle => CtlRequest::DensityCycle,
+            other => CtlRequest::Density { mode: other.into() },
+        },
         Command::Profile { action } => match action {
             ProfileCmd::Activate { name } => CtlRequest::Profile {
                 action: ProfileAction::Activate,

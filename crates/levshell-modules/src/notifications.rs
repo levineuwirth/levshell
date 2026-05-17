@@ -37,9 +37,15 @@ const MODULE_NAME: &str = "notifications";
 pub trait NotificationSender: Send + Sync {
     fn send_critical(&self, widget_id: &str, title: &str, body: &str)
         -> Result<(), String>;
+
+    /// Surface an ideation nudge. Normal urgency (not Critical) — this
+    /// is a gentle prompt, not an alert. Goes through the same
+    /// Freedesktop path, which `levshell`'s own NotificationServer owns,
+    /// so the nudge lands in the notification center / popup.
+    fn send_nudge(&self, kind: &str, title: &str) -> Result<(), String>;
 }
 
-/// Production sender: invokes `notify-rust` with Urgency::Critical.
+/// Production sender: invokes `notify-rust`.
 pub struct NotifyRustSender;
 
 impl NotificationSender for NotifyRustSender {
@@ -53,6 +59,16 @@ impl NotificationSender for NotifyRustSender {
             .summary(title)
             .body(body)
             .urgency(notify_rust::Urgency::Critical)
+            .show()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    fn send_nudge(&self, kind: &str, title: &str) -> Result<(), String> {
+        notify_rust::Notification::new()
+            .summary(title)
+            .body(&format!("Ideation · {kind}"))
+            .urgency(notify_rust::Urgency::Normal)
             .show()
             .map(|_| ())
             .map_err(|e| e.to_string())
@@ -82,35 +98,49 @@ impl Module for NotificationsModule {
     }
 
     fn subscribed_events(&self) -> Vec<EventKind> {
-        vec![EventKind::CriticalEscalation]
+        vec![EventKind::CriticalEscalation, EventKind::NudgeDelivered]
     }
 
     async fn on_event(&mut self, event: &Event) -> ModuleResult<()> {
-        if let Event::CriticalEscalation {
-            widget_id,
-            title,
-            body,
-        } = event
-        {
-            let msg = DaemonMessage::CriticalEscalation(CriticalEscalation {
-                widget_id: widget_id.clone(),
-                title: title.clone(),
-                body: body.clone(),
-            });
-            if let Err(e) = self.publisher.try_send(msg) {
-                tracing::warn!(
-                    error = %e,
-                    widget_id = %widget_id,
-                    "notifications: shell channel drop"
-                );
+        match event {
+            Event::CriticalEscalation {
+                widget_id,
+                title,
+                body,
+            } => {
+                let msg = DaemonMessage::CriticalEscalation(CriticalEscalation {
+                    widget_id: widget_id.clone(),
+                    title: title.clone(),
+                    body: body.clone(),
+                });
+                if let Err(e) = self.publisher.try_send(msg) {
+                    tracing::warn!(
+                        error = %e,
+                        widget_id = %widget_id,
+                        "notifications: shell channel drop"
+                    );
+                }
+                if let Err(e) = self.sender.send_critical(widget_id, title, body) {
+                    tracing::warn!(
+                        error = %e,
+                        widget_id = %widget_id,
+                        "notifications: OS notification send failed"
+                    );
+                }
             }
-            if let Err(e) = self.sender.send_critical(widget_id, title, body) {
-                tracing::warn!(
-                    error = %e,
-                    widget_id = %widget_id,
-                    "notifications: OS notification send failed"
-                );
+            // Ideation nudges have no dedicated DaemonMessage; the
+            // Freedesktop path (owned by levshell's own
+            // NotificationServer) is the delivery surface.
+            Event::NudgeDelivered { kind, title, .. } => {
+                if let Err(e) = self.sender.send_nudge(kind, title) {
+                    tracing::warn!(
+                        error = %e,
+                        kind = %kind,
+                        "notifications: nudge send failed"
+                    );
+                }
             }
+            _ => {}
         }
         Ok(())
     }
@@ -125,6 +155,7 @@ mod tests {
 
     struct SpySender {
         calls: Mutex<Vec<(String, String, String)>>,
+        nudges: Mutex<Vec<(String, String)>>,
         result: Mutex<Result<(), String>>,
     }
 
@@ -132,12 +163,17 @@ mod tests {
         fn with_result(result: Result<(), String>) -> Self {
             Self {
                 calls: Mutex::new(Vec::new()),
+                nudges: Mutex::new(Vec::new()),
                 result: Mutex::new(result),
             }
         }
 
         fn calls(&self) -> Vec<(String, String, String)> {
             self.calls.lock().unwrap().clone()
+        }
+
+        fn nudges(&self) -> Vec<(String, String)> {
+            self.nudges.lock().unwrap().clone()
         }
     }
 
@@ -153,6 +189,14 @@ mod tests {
                 title.to_string(),
                 body.to_string(),
             ));
+            self.result.lock().unwrap().clone()
+        }
+
+        fn send_nudge(&self, kind: &str, title: &str) -> Result<(), String> {
+            self.nudges
+                .lock()
+                .unwrap()
+                .push((kind.to_string(), title.to_string()));
             self.result.lock().unwrap().clone()
         }
     }
@@ -264,7 +308,28 @@ mod tests {
         let task = spawn_writer_task(w, 4);
         let m = NotificationsModule::new(task.publisher, spy);
         let subs = m.subscribed_events();
-        assert_eq!(subs.len(), 1);
-        assert_eq!(subs[0], EventKind::CriticalEscalation);
+        assert_eq!(subs.len(), 2);
+        assert!(subs.contains(&EventKind::CriticalEscalation));
+        assert!(subs.contains(&EventKind::NudgeDelivered));
+    }
+
+    #[tokio::test]
+    async fn on_event_forwards_nudge_to_sender() {
+        let spy = Arc::new(SpySender::with_result(Ok(())));
+        let (mut module, _fwd) = module_with_spy(spy.clone()).await;
+        module
+            .on_event(&Event::NudgeDelivered {
+                project_id: uuid::Uuid::nil(),
+                kind: "open_question".into(),
+                title: "Revisit the attention-sparsity assumption".into(),
+            })
+            .await
+            .unwrap();
+        let nudges = spy.nudges();
+        assert_eq!(nudges.len(), 1);
+        assert_eq!(nudges[0].0, "open_question");
+        assert_eq!(nudges[0].1, "Revisit the attention-sparsity assumption");
+        // Nudges must NOT go through the critical sender/publisher.
+        assert!(spy.calls().is_empty());
     }
 }

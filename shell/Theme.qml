@@ -158,12 +158,16 @@ QtObject {
     property int  barBlurRadiusBattery:   0
 
     // Dropdown panels (palette / notification center / quick settings /
-    // clock hub) sit slightly more transparent than the bar so the
-    // wallpaper still reads through them. `panelOpacityBattery` keeps
-    // a touch of blur even on opaque-mode systems for legibility on
-    // bright wallpapers.
-    property real panelOpacity:        0.72
-    property real panelOpacityBattery: 0.96
+    // clock hub). The original design assumed a compositor-side backdrop
+    // blur behind a semi-transparent panel (alpha ≈ 0.72). Sway/wlroots
+    // does NOT implement the background-blur protocol Quickshell's
+    // `BackgroundEffect.blurRegion` needs (`ext_background_effect_v1`),
+    // so on this compositor the blur is a silent no-op and a 0.72 panel
+    // just renders raw see-through — wallpaper bleeds through the text
+    // and the panel reads as broken. Until/unless a blurred compositor
+    // is in use, panels must be near-opaque to stay legible.
+    property real panelOpacity:        0.97
+    property real panelOpacityBattery: 0.98
 
     property bool onBattery: false
 
@@ -314,6 +318,24 @@ QtObject {
     readonly property string iconSpeakerHigh:     "\uE44A"  // ph-speaker-high
     readonly property string iconSpeakerSlash:    "\uE45A"  // ph-speaker-slash (muted)
     readonly property string iconSun:             "\uE472"  // ph-sun (brightness)
+
+    // Quick-settings tiles. These codepoints were render-verified against
+    // the bundled shell/fonts/Phosphor.ttf (the font carries no semantic
+    // glyph names, so each was confirmed visually, not assumed from a
+    // Phosphor version map). NOTE: the prior inline \uE0A0 ("Bluetooth")
+    // and \uE334 ("Night Light") were WRONG in THIS font \u2014 they render as
+    // left-right arrows and a computer mouse respectively; the constants
+    // below are the verified replacements.
+    readonly property string iconBluetooth:       "\uE0DA"  // ph-bluetooth
+    readonly property string iconMoon:            "\uE330"  // ph-moon (night light)
+    readonly property string iconVideoCamera:     "\uE4DA"  // ph-video-camera (screen rec)
+    readonly property string iconShieldCheck:     "\uE40C"  // ph-shield-check (VPN)
+    readonly property string iconCaretDown:       "\uE136"  // ph-caret-down (expand)
+
+    // Control-center bar entry point. Aliased to the verified
+    // squares-four glyph (a 2x2 tile grid \u2014 the macOS Control Center
+    // metaphor) rather than minting an unverified Phosphor codepoint.
+    readonly property string iconControlCenter:   iconSquaresFour
 
     // Status indicator icon aliases (referenced by WidgetWrapper).
     readonly property string statusIconStale: iconClockCountdown

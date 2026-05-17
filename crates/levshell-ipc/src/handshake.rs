@@ -78,6 +78,11 @@ pub enum CtlRequest {
     Status,
     /// Request a bar-density change. Phase 1.4 wires the bus consumer.
     Density { mode: BarDensity },
+    /// Advance bar density to the next mode server-side
+    /// (full -> compact -> hidden -> full). The daemon resolves the next
+    /// value from the stored `bar.density` signal, so the client need not
+    /// know the current density.
+    DensityCycle,
     /// Activate, cycle, or query a context profile. Phase 1.2 wires the
     /// bus consumer.
     Profile {

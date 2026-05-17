@@ -24,4 +24,4 @@ pub use app_launcher::AppLauncherProvider;
 pub use module::{PaletteModule, PALETTE_WIDGET_ID, PALETTE_WIDGET_TYPE};
 pub use note_search::NoteSearchProvider;
 pub use provider::{merge_results, PaletteItem, PaletteProvider, PaletteState};
-pub use workspace_switcher::WorkspaceSwitcherProvider;
+pub use workspace_switcher::{sway_switch_workspace, WorkspaceSwitcherProvider};

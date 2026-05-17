@@ -25,9 +25,19 @@ Rectangle {
     property var arrivalTimes: ({})
     property bool doNotDisturb: false
     property bool isOpen: false
+    // Snooze/pin (§2.1.6). pinnedIds: id -> true. snoozedUntil:
+    // id -> epoch-ms; the entry is hidden until that time, unless
+    // pinned (pin wins — a pinned item is never auto-hidden).
+    property var pinnedIds: ({})
+    property var snoozedUntil: ({})
+    // Bumped on a timer so groupedPayload re-evaluates snooze expiry
+    // even when no notification arrives.
+    property int snoozeTick: 0
 
     signal dndToggled()
     signal closeRequested()
+    signal pinToggled(var nId)
+    signal snoozeRequested(var nId)
 
     // =================================================================
     // NOTIFICATION GROUPING
@@ -42,9 +52,15 @@ Rectangle {
         const byApp = {};
         const order = [];
         const items = notifModel.values || [];
+        const nowMs = Date.now();
+        const _tick = root.snoozeTick; // re-eval dependency on expiry
         for (let i = 0; i < items.length; i++) {
             const n = items[i];
             if (!n) continue;
+            const pinned = !!root.pinnedIds[n.id];
+            // Snoozed and not pinned → hidden until the snooze expires.
+            const until = root.snoozedUntil[n.id];
+            if (!pinned && until && until > nowMs) continue;
             const app = n.appName || "Unknown";
             if (!byApp[app]) {
                 byApp[app] = [];
@@ -58,6 +74,7 @@ Rectangle {
                 appIcon: n.appIcon || "",
                 nId: n.id,
                 urgency: n.urgency,
+                pinned: pinned,
                 actions: n.actions || [],
                 hasInlineReply: n.hasInlineReply || false,
                 inlineReplyPlaceholder: n.inlineReplyPlaceholder || "Reply...",
@@ -96,6 +113,9 @@ Rectangle {
         onTriggered: {
             // Force re-evaluation by toggling a dummy property.
             root.arrivalTimes = root.arrivalTimes;
+            // Re-evaluate snooze expiry (10-min snoozes; 30s
+            // granularity is plenty).
+            root.snoozeTick++;
         }
     }
 
@@ -384,7 +404,7 @@ Rectangle {
 
                     // Text column: summary, body, timestamp, actions.
                     Column {
-                        width: parent.width - 28 - Theme.spaceMd - dismissBtn.width - Theme.spaceSm
+                        width: parent.width - 28 - Theme.spaceMd - entryControls.width - Theme.spaceSm
                         spacing: 2
 
                         // Summary + timestamp row.
@@ -522,25 +542,76 @@ Rectangle {
                         }
                     }
 
-                    // Dismiss button (top-right of entry).
-                    Text {
-                        id: dismissBtn
+                    // Top-right controls: pin · snooze · dismiss.
+                    Row {
+                        id: entryControls
                         anchors.top: parent.top
-                        text: Theme.iconX
-                        color: entryHover.containsMouse ? Theme.fg : "transparent"
-                        font.family: Theme.fontIcon
-                        font.pixelSize: 14
+                        spacing: Theme.spaceSm
 
-                        Behavior on color {
-                            ColorAnimation { duration: Theme.motionFast }
+                        // Pin (★ filled when pinned, ☆ otherwise).
+                        // Pinned entries are never auto-hidden by snooze.
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: entry.modelData.pinned ? "★" : "☆"
+                            color: entry.modelData.pinned
+                                   ? Theme.primary
+                                   : (entryHover.containsMouse ? Theme.fgSubtle : "transparent")
+                            font.family: Theme.fontText
+                            font.pixelSize: 14
+                            Behavior on color { ColorAnimation { duration: Theme.motionFast } }
+                            MouseArea {
+                                anchors.fill: parent
+                                anchors.margins: -Theme.spaceXs
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: root.pinToggled(entry.modelData.nId)
+                            }
                         }
 
-                        MouseArea {
-                            anchors.fill: parent
-                            anchors.margins: -Theme.spaceXs
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: entry.modelData.notification.dismiss()
+                        // Snooze (10 min). Hidden for pinned entries —
+                        // snoozing something you pinned is contradictory.
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            visible: !entry.modelData.pinned
+                            text: Theme.iconClockCountdown
+                            color: entryHover.containsMouse ? Theme.fgSubtle : "transparent"
+                            font.family: Theme.fontIcon
+                            font.pixelSize: 14
+                            Behavior on color { ColorAnimation { duration: Theme.motionFast } }
+                            MouseArea {
+                                anchors.fill: parent
+                                anchors.margins: -Theme.spaceXs
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: root.snoozeRequested(entry.modelData.nId)
+                            }
                         }
+
+                        // Dismiss.
+                        Text {
+                            id: dismissBtn
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: Theme.iconX
+                            color: entryHover.containsMouse ? Theme.fg : "transparent"
+                            font.family: Theme.fontIcon
+                            font.pixelSize: 14
+                            Behavior on color { ColorAnimation { duration: Theme.motionFast } }
+                            MouseArea {
+                                anchors.fill: parent
+                                anchors.margins: -Theme.spaceXs
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: entry.modelData.notification.dismiss()
+                            }
+                        }
+                    }
+
+                    // Pinned marker — thin accent strip on the left.
+                    Rectangle {
+                        anchors.left: parent.left
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        width: 2
+                        radius: 1
+                        color: Theme.primary
+                        visible: entry.modelData.pinned
                     }
                 }
             }

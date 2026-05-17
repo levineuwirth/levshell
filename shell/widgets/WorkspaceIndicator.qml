@@ -55,6 +55,21 @@ WidgetWrapper {
                                  : Theme.typeLabelWeight
                     font.features: ({ "tnum": 1 })
                 }
+
+                // Per-pill click → ask the daemon to switch (QML never
+                // talks to sway directly). Fills the pill, whose size
+                // comes from wsLabel, not the measured content slot, so
+                // this introduces no targetWidth binding loop.
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: shell.sendShellMessage({
+                        type: "widget_action",
+                        widget_id: "workspace-indicator",
+                        action: "switch",
+                        data: { name: pill.modelData.name }
+                    })
+                }
             }
         }
     }

@@ -17,6 +17,31 @@ use super::provider::{PaletteItem, PaletteProvider, ProviderError, ProviderResul
 
 pub const WORKSPACE_SWITCHER_PROVIDER: &str = "workspace-switcher";
 
+/// Switch to the named sway workspace. Shared by the palette provider's
+/// `execute()` and the clickable bar workspace indicator (the daemon
+/// routes a `WidgetAction` here). Stateless: opens a fresh sway IPC
+/// connection per call. On a host without sway this returns an error
+/// the caller logs and swallows.
+pub async fn sway_switch_workspace(name: &str) -> Result<(), String> {
+    let mut conn = Connection::new()
+        .await
+        .map_err(|e| format!("sway IPC unavailable: {e}"))?;
+    // Single-quote the name (sway's parser treats quotes specially;
+    // names can contain spaces). Escape embedded single quotes.
+    let cmd = format!("workspace '{}'", name.replace('\'', r"'\''"));
+    let results = conn
+        .run_command(&cmd)
+        .await
+        .map_err(|e| format!("run_command failed: {e}"))?;
+    for r in results {
+        if let Err(err) = r {
+            tracing::warn!(error = %err, "workspace switch: sway command error");
+        }
+    }
+    tracing::info!(workspace = %name, "workspace switch");
+    Ok(())
+}
+
 pub struct WorkspaceSwitcherProvider;
 
 impl WorkspaceSwitcherProvider {

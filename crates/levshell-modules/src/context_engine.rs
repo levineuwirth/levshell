@@ -307,8 +307,25 @@ impl ContextEngineModule {
                 self.signals.set("power.on_battery", *on_battery);
             }
             Event::BarDensityRequested { mode } => {
-                self.signals.set("bar.density", mode.clone());
-                let density = match mode.as_str() {
+                // `cycle` is a sentinel from `levshell-ctl density cycle`:
+                // resolve the next mode from the stored signal
+                // (full -> compact -> hidden -> full). Absent == full.
+                let resolved: &str = if mode == "cycle" {
+                    let current = self
+                        .signals
+                        .get("bar.density")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("full");
+                    match current {
+                        "full" => "compact",
+                        "compact" => "hidden",
+                        _ => "full",
+                    }
+                } else {
+                    mode.as_str()
+                };
+                self.signals.set("bar.density", resolved.to_owned());
+                let density = match resolved {
                     "compact" => BarDensity::Compact,
                     "hidden" => BarDensity::Hidden,
                     _ => BarDensity::Full,
@@ -494,6 +511,19 @@ pub fn default_widgets() -> Vec<WidgetDef> {
             .with_default(Prominence::IconOnly)
             .with_priority(20)
             .with_zone(Zone::Right),
+        // Hardware-independent entry point for the Quick-Settings
+        // flyout. Without this the flyout is only reachable via the
+        // battery widget, which self-parks on desktops.
+        WidgetDef::new("control-center", "control_center")
+            .with_default(Prominence::IconOnly)
+            .with_priority(25)
+            .with_zone(Zone::Right),
+        // System tray (SNI host). Spec lists it in the context
+        // engine's always-present base layer; rendered icons-only.
+        WidgetDef::new("system-tray", "system_tray")
+            .with_default(Prominence::IconOnly)
+            .with_priority(22)
+            .with_zone(Zone::Right),
         // Note: the command palette is an overlay, not an in-bar
         // widget, and is intentionally NOT listed here. The shell reads
         // its state directly from a command-palette WidgetUpdate; the
@@ -506,6 +536,23 @@ pub fn default_widgets() -> Vec<WidgetDef> {
 /// chain further [`ContextEngineModule`] builder methods on the result.
 pub fn default_context_engine(publisher: WidgetPublisher) -> ContextEngineModule {
     ContextEngineModule::new(publisher).with_widgets(default_widgets())
+}
+
+/// Best-effort query of the layout pixel budget via sway IPC: the widest
+/// active output. The bar spans its focused output; using the widest
+/// active output as the budget is a safe single-/multi-monitor default
+/// and replaces the hardcoded [`DEFAULT_AVAILABLE_WIDTH`] fallback.
+/// Returns `None` if sway is unreachable or reports no usable output, in
+/// which case callers keep the default.
+pub async fn primary_output_width() -> Option<u32> {
+    let mut conn = swayipc_async::Connection::new().await.ok()?;
+    let outputs = conn.get_outputs().await.ok()?;
+    outputs
+        .into_iter()
+        .filter(|o| o.active)
+        .map(|o| o.rect.width.max(0) as u32)
+        .max()
+        .filter(|w| *w > 0)
 }
 
 #[cfg(test)]

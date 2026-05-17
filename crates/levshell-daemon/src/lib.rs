@@ -555,13 +555,51 @@ fn route_shell_message(bus: &EventBus, msg: ShellMessage) {
             });
         }
         ShellMessage::WidgetAction(a) => {
-            // Not yet routed — widgets that want actions will pick this
-            // up in a later phase.
-            tracing::debug!(
-                widget_id = %a.widget_id,
-                action = %a.action,
-                "shell: widget action (ignored)"
-            );
+            if a.widget_id == "workspace-indicator" && a.action == "switch" {
+                match a.data.get("name").and_then(|v| v.as_str()) {
+                    Some(name) => {
+                        // route_shell_message is sync but runs on the
+                        // tokio runtime (reader task); detach the sway
+                        // IPC round-trip so routing stays non-blocking.
+                        let name = name.to_owned();
+                        tokio::spawn(async move {
+                            if let Err(e) =
+                                levshell_modules::sway_switch_workspace(&name).await
+                            {
+                                tracing::warn!(
+                                    error = %e,
+                                    workspace = %name,
+                                    "workspace-indicator: switch failed"
+                                );
+                            }
+                        });
+                    }
+                    None => tracing::warn!(
+                        "workspace-indicator switch: missing string data.name"
+                    ),
+                }
+            } else if a.widget_id == "cpu" && a.action == "list_processes" {
+                bus.publish(Event::ProcessListRequested);
+            } else if a.widget_id == "cpu" && a.action == "kill_process" {
+                match (
+                    a.data.get("pid").and_then(|v| v.as_i64()),
+                    a.data.get("signal").and_then(|v| v.as_str()),
+                ) {
+                    (Some(pid), signal) => bus.publish(Event::ProcessKillRequested {
+                        pid: pid as i32,
+                        signal: signal.unwrap_or("TERM").to_owned(),
+                    }),
+                    (None, _) => {
+                        tracing::warn!("cpu kill_process: missing integer data.pid")
+                    }
+                }
+            } else {
+                tracing::debug!(
+                    widget_id = %a.widget_id,
+                    action = %a.action,
+                    "shell: widget action (ignored)"
+                );
+            }
         }
         ShellMessage::DuckSay(s) => {
             tracing::debug!(chars = s.text.len(), "shell: duck say");
@@ -623,6 +661,15 @@ async fn dispatch_ctl_request(request: CtlRequest, state: &SharedState) -> CtlRe
             };
             state.bus.publish(Event::BarDensityRequested {
                 mode: mode_str.to_owned(),
+            });
+            CtlResponse::Ok
+        }
+
+        CtlRequest::DensityCycle => {
+            // Sentinel the context engine resolves against the stored
+            // `bar.density` signal; the daemon holds no density state.
+            state.bus.publish(Event::BarDensityRequested {
+                mode: "cycle".to_owned(),
             });
             CtlResponse::Ok
         }

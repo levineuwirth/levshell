@@ -1,4 +1,10 @@
+//@ pragma UseQApplication
 // Levshell QML shell — Phase 1.4 bar.
+//
+// `UseQApplication`: required so the system-tray SNI context menus
+// (SystemTrayWidget → item.display()) can render — Quickshell platform
+// /D-Bus menus need QApplication (QtWidgets) mode. No effect on the
+// rest of the shell.
 //
 // Run with:
 //   quickshell -p shell/main.qml
@@ -79,19 +85,47 @@ Scope {
             // org.freedesktop.Notifications.
             console.log("levshell: notif", notification.appName, "—",
                         notification.summary);
+            // Always track so it persists in the center for later
+            // review. If DnD is active, flag it muted: it won't count
+            // toward the bell's unread badge (this shell has no toast/
+            // sound surface, so badge-exclusion is the silence).
             notification.tracked = true;
-            shell.notifArrivalTimes[notification.id] = Date.now();
-            shell.notifArrivalTimes = shell.notifArrivalTimes; // trigger change
+            if (shell.doNotDisturb) {
+                shell.mutedNotifIds[notification.id] = true;
+                shell.mutedNotifIds = shell.mutedNotifIds; // trigger change
+            } else {
+                shell.notifArrivalTimes[notification.id] = Date.now();
+                shell.notifArrivalTimes = shell.notifArrivalTimes; // trigger change
+            }
         }
     }
 
     property bool notificationCenterOpen: false
     property bool doNotDisturb: false
     property var notifArrivalTimes: ({})
+    // Ids of notifications received while DnD was active — persisted but
+    // excluded from the unread badge (see NotificationsWidget).
+    property var mutedNotifIds: ({})
+    // Notification snooze/pin (§2.1.6), shell-local. pinnedNotifIds:
+    // id -> true (immune to snooze, marked). snoozedNotifUntil:
+    // id -> epoch-ms; hidden from the center until that time passes.
+    property var pinnedNotifIds: ({})
+    property var snoozedNotifUntil: ({})
     property bool clockHubOpen: false
     property bool quickSettingsOpen: false
+    // Bar density as chosen by the daemon. Theme.density is bound to an
+    // *effective* value (see the Binding by the bar): in hidden mode,
+    // pointing at the top screen edge transiently reveals the full bar
+    // (spec §2.1.4) without disturbing this daemon-owned value.
+    property string daemonDensity: "full"
+    property bool barRevealed: false
     property bool warmupOpen: false
     property var warmupPayload: ({ fired_at: "", events: [], anki_due_count: 0, projects: [] })
+    // Upcoming-events feed for the clock dropdown (DaemonMessage::ClockHub).
+    property var clockHubPayload: ({ generated_at: "", events: [] })
+    // CPU process sniper (§2.3.5, DaemonMessage::ProcessList).
+    property bool processSniperOpen: false
+    property var processListPayload: ({ generated_at: "", processes: [] })
 
     // Rubber-duck (§2.12.6). Messages are plain objects
     //   { role: "user" | "assistant", content: string }
@@ -112,6 +146,19 @@ Scope {
     function toggleQuickSettings() {
         quickSettingsOpen = !quickSettingsOpen;
         if (quickSettingsOpen) { notificationCenterOpen = false; clockHubOpen = false; }
+    }
+    function openProcessSniper() {
+        shell.sendShellMessage({
+            type: "widget_action", widget_id: "cpu",
+            action: "list_processes", data: {}
+        });
+        processSniperOpen = true;
+    }
+    function killProcess(pid, signal) {
+        shell.sendShellMessage({
+            type: "widget_action", widget_id: "cpu",
+            action: "kill_process", data: { pid: pid, signal: signal }
+        });
     }
 
     // ----------------------------------------------------------------------
@@ -144,7 +191,9 @@ Scope {
         "memory": memoryComponent,
         "battery": batteryComponent,
         "network": networkComponent,
-        "notifications": notificationsComponent
+        "notifications": notificationsComponent,
+        "control-center": controlCenterComponent,
+        "system-tray": systemTrayComponent
     })
 
     Component { id: workspaceIndicatorComponent; WorkspaceIndicator {} }
@@ -155,6 +204,8 @@ Scope {
     Component { id: batteryComponent; BatteryWidget {} }
     Component { id: networkComponent; NetworkWidget {} }
     Component { id: notificationsComponent; NotificationsWidget {} }
+    Component { id: controlCenterComponent; ControlCenterWidget {} }
+    Component { id: systemTrayComponent; SystemTrayWidget {} }
 
     // ----------------------------------------------------------------------
     // Dispatch a parsed DaemonMessage into the state stores.
@@ -205,7 +256,10 @@ Scope {
             break;
         }
         case "bar_density_state": {
-            Theme.density = msg.mode || "full";
+            // Effective Theme.density is derived (see the Binding near
+            // the bar) so hidden-mode edge reveal can transiently force
+            // "full" without losing the daemon's chosen density.
+            shell.daemonDensity = msg.mode || "full";
             break;
         }
         case "theme": {
@@ -220,6 +274,20 @@ Scope {
                 projects: msg.projects || []
             };
             shell.warmupOpen = true;
+            break;
+        }
+        case "clock_hub": {
+            shell.clockHubPayload = {
+                generated_at: msg.generated_at || "",
+                events: msg.events || []
+            };
+            break;
+        }
+        case "process_list": {
+            shell.processListPayload = {
+                generated_at: msg.generated_at || "",
+                processes: msg.processes || []
+            };
             break;
         }
         case "duck_open": {
@@ -358,6 +426,66 @@ Scope {
     }
 
     // ----------------------------------------------------------------------
+    // Hidden-bar edge reveal (§2.1.4).
+    //
+    // Theme.density is the *effective* density: normally the daemon's
+    // value, but transiently "full" when the bar is hidden and the
+    // pointer is at the top screen edge (or over the revealed bar).
+    // Binding the singleton property means every density-derived token
+    // (bar height, icon size, widget prominence) follows automatically,
+    // and the existing implicitHeight SpringAnimation does the slide.
+    // ----------------------------------------------------------------------
+    Binding {
+        target: Theme
+        property: "density"
+        value: (shell.daemonDensity === "hidden" && shell.barRevealed)
+                ? "full" : shell.daemonDensity
+    }
+
+    property bool barEdgeHovered: false
+    property bool barPanelHovered: false
+    function recomputeBarReveal() {
+        if (shell.barEdgeHovered || shell.barPanelHovered) {
+            barRevealHideTimer.stop();
+            shell.barRevealed = true;
+        } else {
+            barRevealHideTimer.restart();
+        }
+    }
+    Timer {
+        id: barRevealHideTimer
+        interval: 500
+        onTriggered: if (!shell.barEdgeHovered && !shell.barPanelHovered)
+                         shell.barRevealed = false
+    }
+
+    // A 4px transparent strip pinned to the top edge, present only in
+    // hidden density, that catches the pointer push and triggers the
+    // reveal. exclusiveZone 0 so it reserves no layout space.
+    Variants {
+        model: Quickshell.screens
+        delegate: PanelWindow {
+            required property var modelData
+            screen: modelData
+            visible: shell.daemonDensity === "hidden"
+            anchors { top: true; left: true; right: true }
+            implicitHeight: 4
+            exclusiveZone: 0
+            color: "transparent"
+            WlrLayershell.layer: WlrLayer.Overlay
+            WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+            WlrLayershell.namespace: "levshell-bar-reveal"
+
+            HoverHandler {
+                onHoveredChanged: {
+                    shell.barEdgeHovered = hovered;
+                    shell.recomputeBarReveal();
+                }
+            }
+        }
+    }
+
+    // ----------------------------------------------------------------------
     // PanelWindow — one top-edge bar per screen.
     // ----------------------------------------------------------------------
     Variants {
@@ -411,6 +539,15 @@ Scope {
                 height: 1
                 color: Theme.bgDark
                 opacity: 0.30
+            }
+
+            // Keeps the bar revealed while the pointer is over it in
+            // hidden mode; the linger timer hides it on leave.
+            HoverHandler {
+                onHoveredChanged: {
+                    shell.barPanelHovered = hovered;
+                    shell.recomputeBarReveal();
+                }
             }
 
             // Left zone.
@@ -670,8 +807,20 @@ Scope {
             notifModel: notifServer.trackedNotifications
             arrivalTimes: shell.notifArrivalTimes
             doNotDisturb: shell.doNotDisturb
+            pinnedIds: shell.pinnedNotifIds
+            snoozedUntil: shell.snoozedNotifUntil
             onDndToggled: shell.doNotDisturb = !shell.doNotDisturb
             onCloseRequested: shell.notificationCenterOpen = false
+            onPinToggled: (nId) => {
+                if (shell.pinnedNotifIds[nId]) delete shell.pinnedNotifIds[nId];
+                else shell.pinnedNotifIds[nId] = true;
+                shell.pinnedNotifIds = shell.pinnedNotifIds; // notify
+            }
+            onSnoozeRequested: (nId) => {
+                // 10-minute snooze; resurfaces automatically.
+                shell.snoozedNotifUntil[nId] = Date.now() + 600000;
+                shell.snoozedNotifUntil = shell.snoozedNotifUntil; // notify
+            }
             isOpen: shell.notificationCenterOpen
         }
     }
@@ -729,15 +878,17 @@ Scope {
             anchors.top: parent.top
             anchors.topMargin: Theme.barHeight + Theme.spaceSm
             isOpen: shell.clockHubOpen
+            payload: shell.clockHubPayload
         }
     }
 
     // ----------------------------------------------------------------------
-    // Quick-settings flyout overlay (§2.1.7 scaffold).
+    // Quick-settings flyout overlay (§2.1.7).
     //
-    // Placeholder: volume/brightness sliders, toggle tiles for Wi-Fi,
-    // Bluetooth, DnD, night-light. Will wire to PipeWire and
-    // brightnessctl in a later phase.
+    // Fully wired: PipeWire volume + xbacklight brightness sliders;
+    // Wi-Fi/Bluetooth/DnD/Night-Light/Screen-Rec/VPN toggle tiles; Wi-Fi
+    // and Bluetooth tiles expand to an inline detail card. See
+    // QuickSettings.qml for the per-backend gating rationale.
     // ----------------------------------------------------------------------
     PanelWindow {
         id: quickSettingsWindow
@@ -789,6 +940,59 @@ Scope {
             isOpen: shell.quickSettingsOpen
             doNotDisturb: shell.doNotDisturb
             onDndToggled: shell.doNotDisturb = !shell.doNotDisturb
+        }
+    }
+
+    // ----------------------------------------------------------------------
+    // CPU process sniper overlay (§2.3.5).
+    // ----------------------------------------------------------------------
+    PanelWindow {
+        id: processSniperWindow
+
+        property bool isClosing: false
+        visible: shell.processSniperOpen || isClosing
+
+        Connections {
+            target: shell
+            function onProcessSniperOpenChanged() {
+                if (shell.processSniperOpen) {
+                    processSniperWindow.isClosing = false;
+                    snipeCloseTimer.stop();
+                } else if (processSniperWindow.visible && !processSniperWindow.isClosing) {
+                    processSniperWindow.isClosing = true;
+                    snipeCloseTimer.restart();
+                }
+            }
+        }
+
+        Timer {
+            id: snipeCloseTimer
+            interval: Theme.motionSlow + 50
+            onTriggered: processSniperWindow.isClosing = false
+        }
+
+        WlrLayershell.layer: WlrLayer.Overlay
+        WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+        WlrLayershell.namespace: "levshell-proc-sniper"
+
+        anchors { top: true; left: true; right: true; bottom: true }
+        color: "transparent"
+
+        MouseArea {
+            anchors.fill: parent
+            onClicked: shell.processSniperOpen = false
+        }
+
+        ProcessSniper {
+            id: processSniperPanel
+            anchors.right: parent.right
+            anchors.rightMargin: Theme.spaceLg
+            anchors.top: parent.top
+            anchors.topMargin: Theme.barHeight + Theme.spaceSm
+            isOpen: shell.processSniperOpen
+            payload: shell.processListPayload
+            onKill: (pid, signal) => shell.killProcess(pid, signal)
+            onRefresh: shell.openProcessSniper()
         }
     }
 

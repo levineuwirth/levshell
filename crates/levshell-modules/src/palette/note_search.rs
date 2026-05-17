@@ -4,14 +4,16 @@
 //! [`DataStore::search_notes`]. The query is suffixed with `*` so users
 //! get prefix matching as they type.
 //!
-//! Phase 1.5 `execute()` is a no-op beyond logging the note id — we don't
-//! yet have an editor launcher or an in-shell note viewer. A later phase
-//! will either publish a "focus note" bus event or launch $EDITOR.
+//! `execute()` renders the stored note to a Markdown file in the
+//! runtime dir and hands it to `xdg-open` (the user's default Markdown
+//! handler / Obsidian). This is a read view — the synced source is
+//! canonical; edits to the temp copy do not round-trip. A future
+//! in-shell note viewer can supersede it.
 
 use async_trait::async_trait;
 use levshell_data::{DataStore, NoteSearchHit};
 
-use super::provider::{PaletteItem, PaletteProvider, ProviderResult};
+use super::provider::{PaletteItem, PaletteProvider, ProviderError, ProviderResult};
 
 pub const NOTE_SEARCH_PROVIDER: &str = "note-search";
 
@@ -87,10 +89,56 @@ impl PaletteProvider for NoteSearchProvider {
     }
 
     async fn execute(&self, item_id: &str) -> ProviderResult<()> {
-        // Phase 1.5 placeholder: just log the selection. A later phase
-        // will either publish a "focus note" bus event (picked up by a
-        // note-viewer module) or spawn $EDITOR.
-        tracing::info!(note_id = %item_id, "note-search: selected (no-op in Phase 1.5)");
+        // The PaletteItem id is the note's UUID (see `note_to_item`).
+        let id = uuid::Uuid::parse_str(item_id).map_err(|e| {
+            ProviderError::ExecuteFailed(format!("bad note id {item_id:?}: {e}"))
+        })?;
+        let note = self
+            .store
+            .get_note(id)
+            .await
+            .map_err(|e| ProviderError::ExecuteFailed(format!("get_note: {e}")))?;
+        let Some(note) = note else {
+            // Note vanished between search and select (e.g. an Obsidian
+            // delete synced in). Not fatal — nothing to open.
+            tracing::info!(note_id = %item_id, "note-search: note no longer exists");
+            return Ok(());
+        };
+
+        // Self-contained "open": render the stored note to a Markdown
+        // file in the runtime dir and hand it to xdg-open (the user's
+        // default Markdown handler / Obsidian). This is a read view —
+        // the canonical copy is the synced source; edits here do not
+        // round-trip back. A future note-viewer module can supersede
+        // this, but it makes selection a real action today.
+        let dir = std::env::var("XDG_RUNTIME_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::env::temp_dir())
+            .join("levshell");
+        std::fs::create_dir_all(&dir).map_err(|e| {
+            ProviderError::ExecuteFailed(format!("create {}: {e}", dir.display()))
+        })?;
+        let path = dir.join(format!("note-{id}.md"));
+        let body = format!("# {}\n\n{}\n", note.title, note.content);
+        std::fs::write(&path, body).map_err(|e| {
+            ProviderError::ExecuteFailed(format!("write {}: {e}", path.display()))
+        })?;
+
+        use std::process::{Command, Stdio};
+        let mut cmd = Command::new("xdg-open");
+        cmd.arg(&path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
+        }
+        cmd.spawn().map_err(|e| {
+            ProviderError::ExecuteFailed(format!("spawn xdg-open: {e}"))
+        })?;
+        tracing::info!(note_id = %item_id, path = %path.display(), "note-search: opened");
         Ok(())
     }
 }
