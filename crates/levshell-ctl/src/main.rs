@@ -14,7 +14,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use levshell_ipc::{
     default_socket_path, BarDensity, ClientRole, ContextSnapshotAction, CtlRequest, CtlResponse,
     DuckAction, Hello, IpcConnection, JsonCodec, NotifyUrgency, PaletteAction, ProfileAction,
-    ThemeAction, WarmupAction,
+    ThemeAction, TimerAction, WarmupAction,
 };
 use tokio::net::UnixStream;
 
@@ -131,6 +131,12 @@ enum Command {
         action: AnkiCmd,
     },
 
+    /// Drive the Pomodoro / focus-session timer (spec §2.2.1).
+    Timer {
+        #[command(subcommand)]
+        action: TimerCmd,
+    },
+
     /// Emit a desktop notification (spec §2.19.1), e.g.
     /// `levshell-ctl notify "Build finished" --urgency normal`.
     Notify {
@@ -201,6 +207,20 @@ fn params_to_json(params: &[String]) -> String {
 enum AnkiCmd {
     /// Print the number of flashcards currently due.
     DueCount,
+}
+
+#[derive(Debug, Subcommand)]
+enum TimerCmd {
+    /// Start a work interval (or resume if paused).
+    Start,
+    /// Freeze the elapsed counter.
+    Pause,
+    /// Unfreeze a paused timer.
+    Resume,
+    /// End the current interval and return to idle.
+    Stop,
+    /// End the current interval immediately and advance to the next.
+    Skip,
 }
 
 #[derive(Debug, Subcommand)]
@@ -527,6 +547,15 @@ fn build_request(cmd: Command) -> CtlRequest {
         },
         Command::Anki { action } => match action {
             AnkiCmd::DueCount => CtlRequest::AnkiDueCount,
+        },
+        Command::Timer { action } => CtlRequest::Timer {
+            action: match action {
+                TimerCmd::Start => TimerAction::Start,
+                TimerCmd::Pause => TimerAction::Pause,
+                TimerCmd::Resume => TimerAction::Resume,
+                TimerCmd::Stop => TimerAction::Stop,
+                TimerCmd::Skip => TimerAction::Skip,
+            },
         },
     }
 }

@@ -22,7 +22,7 @@ pub use error::{IpcError, Result, MAX_FRAME_SIZE};
 pub use handshake::{
     ClientRole, ContextSnapshotAction, CtlRequest, CtlResponse, DuckAction, Hello, NotifyUrgency,
     PaletteAction, ProfileAction, ProjectSummary, StatusSnapshot, ThemeAction, ThemeSnapshot,
-    WarmupAction, PROTOCOL_VERSION,
+    TimerAction, WarmupAction, PROTOCOL_VERSION,
 };
 pub use messages::{
     BarDensity, BarDensityState, BarLayout, ClockHubPayload, CommandPaletteQuery,
