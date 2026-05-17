@@ -147,12 +147,24 @@ impl Module for NotificationsModule {
                         "notifications: shell channel drop"
                     );
                 }
-                if let Err(e) = self.sender.send_critical(widget_id, title, body) {
-                    tracing::warn!(
+                let sender = Arc::clone(&self.sender);
+                let (w, t, b) = (widget_id.clone(), title.clone(), body.clone());
+                let res = tokio::task::spawn_blocking(move || {
+                    sender.send_critical(&w, &t, &b)
+                })
+                .await;
+                match res {
+                    Ok(Err(e)) => tracing::warn!(
                         error = %e,
                         widget_id = %widget_id,
                         "notifications: OS notification send failed"
-                    );
+                    ),
+                    Err(e) => tracing::warn!(
+                        error = %e,
+                        widget_id = %widget_id,
+                        "notifications: OS notification task panicked"
+                    ),
+                    Ok(Ok(())) => {}
                 }
             }
             // Ideation nudges go out two ways: the Freedesktop path
@@ -171,12 +183,24 @@ impl Module for NotificationsModule {
                         "notifications: nudge shell channel drop"
                     );
                 }
-                if let Err(e) = self.sender.send_nudge(kind, title) {
-                    tracing::warn!(
+                let sender = Arc::clone(&self.sender);
+                let (k, t) = (kind.clone(), title.clone());
+                let res = tokio::task::spawn_blocking(move || {
+                    sender.send_nudge(&k, &t)
+                })
+                .await;
+                match res {
+                    Ok(Err(e)) => tracing::warn!(
                         error = %e,
                         kind = %kind,
                         "notifications: nudge send failed"
-                    );
+                    ),
+                    Err(e) => tracing::warn!(
+                        error = %e,
+                        kind = %kind,
+                        "notifications: nudge task panicked"
+                    ),
+                    Ok(Ok(())) => {}
                 }
             }
             // Generic ctl-originated notification (spec §2.19.1). No
@@ -187,11 +211,22 @@ impl Module for NotificationsModule {
                 body,
                 urgency,
             } => {
-                if let Err(e) = self.sender.send_notify(urgency, title, body) {
-                    tracing::warn!(
+                let sender = Arc::clone(&self.sender);
+                let (u, t, b) = (urgency.clone(), title.clone(), body.clone());
+                let res = tokio::task::spawn_blocking(move || {
+                    sender.send_notify(&u, &t, &b)
+                })
+                .await;
+                match res {
+                    Ok(Err(e)) => tracing::warn!(
                         error = %e,
                         "notifications: ctl notify send failed"
-                    );
+                    ),
+                    Err(e) => tracing::warn!(
+                        error = %e,
+                        "notifications: ctl notify task panicked"
+                    ),
+                    Ok(Ok(())) => {}
                 }
             }
             _ => {}
