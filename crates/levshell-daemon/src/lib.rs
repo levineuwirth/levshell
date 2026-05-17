@@ -40,8 +40,8 @@ use levshell_data::{DataStore, EntityType};
 use levshell_ipc::{
     default_socket_path, spawn_writer_task, BarDensity, ClientRole, ContextSnapshotAction,
     CtlRequest, CtlResponse, DuckAction, Hello, IpcConnection, IpcServer, JsonCodec, PaletteAction,
-    ProfileAction, ProjectSummary, ShellMessage, StatusSnapshot, ThemeAction, WarmupAction,
-    WidgetPublisher, PROTOCOL_VERSION,
+    ProfileAction, ProjectSummary, ShellMessage, StatusSnapshot, ThemeAction, TimerAction,
+    WarmupAction, WidgetPublisher, PROTOCOL_VERSION,
 };
 use levshell_modules::{
     default_contexts_dir, delete_snapshot, list_snapshots, restore_snapshot, save_current,
@@ -804,6 +804,25 @@ async fn dispatch_ctl_request(request: CtlRequest, state: &SharedState) -> CtlRe
                 message: format!("anki due-count: {e}"),
             },
         },
+
+        CtlRequest::Timer { action } => {
+            let action_str = match action {
+                TimerAction::Start => "start",
+                TimerAction::Pause => "pause",
+                TimerAction::Resume => "resume",
+                TimerAction::Stop => "stop",
+                TimerAction::Skip => "skip",
+                _ => {
+                    return CtlResponse::Error {
+                        message: "timer: unsupported action for this daemon version".into(),
+                    }
+                }
+            };
+            state.bus.publish(Event::SessionTimerCommand {
+                action: action_str.to_owned(),
+            });
+            CtlResponse::Ok
+        }
 
         // `CtlRequest` is `#[non_exhaustive]`, so future variants land here
         // as a soft rejection instead of breaking the build.
