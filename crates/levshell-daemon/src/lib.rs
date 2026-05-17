@@ -45,7 +45,7 @@ use levshell_ipc::{
 };
 use levshell_modules::{
     default_contexts_dir, delete_snapshot, list_snapshots, restore_snapshot, save_current,
-    ThemeService,
+    AnkiDueModule, ThemeService,
 };
 use levshell_projects::{ProjectRegistry, ProjectRegistryError};
 use levshell_sync::{SyncAdapter, SyncEngine, SyncEngineHandle};
@@ -162,6 +162,10 @@ struct SharedState {
     /// shell's `WidgetPublisher` on handshake so the shell paints the
     /// active theme from first frame.
     theme: Arc<ThemeService>,
+    /// Unified data store. Cheap to clone (`Arc<Mutex<Connection>>`).
+    /// Held so read-only ctl queries (e.g. `anki due-count`) can answer
+    /// without routing through a module.
+    store: DataStore,
 }
 
 /// The daemon entry point. See the module-level docs for the lifecycle.
@@ -267,6 +271,7 @@ pub async fn run_with_sync(
         module_count: Arc::new(AtomicUsize::new(0)),
         projects: projects.clone(),
         theme: theme.clone(),
+        store: store.clone(),
     };
 
     // The factory is a FnOnce, but the accept loop runs many times. Wrap it
@@ -594,11 +599,23 @@ fn route_shell_message(bus: &EventBus, msg: ShellMessage) {
                     }
                 }
             } else {
+                // Generic passthrough (spec §2.19.1, Phase 1.7+ backlog
+                // item 3): anything the daemon doesn't special-case above
+                // becomes a bus event so feature modules (SSH/GPU/remote
+                // dashboards, …) can subscribe and respond. `data` is
+                // stringified here because `levshell-core` is a leaf crate
+                // with no serde_json dependency.
+                let data = serde_json::to_string(&a.data).unwrap_or_else(|_| "{}".to_owned());
                 tracing::debug!(
                     widget_id = %a.widget_id,
                     action = %a.action,
-                    "shell: widget action (ignored)"
+                    "shell: widget action (routed to bus)"
                 );
+                bus.publish(Event::WidgetActionReceived {
+                    widget_id: a.widget_id,
+                    action: a.action,
+                    data,
+                });
             }
         }
         ShellMessage::DuckSay(s) => {
@@ -746,6 +763,47 @@ async fn dispatch_ctl_request(request: CtlRequest, state: &SharedState) -> CtlRe
             });
             CtlResponse::Ok
         }
+
+        CtlRequest::Widget {
+            widget_id,
+            action,
+            data,
+        } => {
+            // Validate the JSON payload so a malformed `key=value` set
+            // surfaces as a clean ctl error rather than a silently empty
+            // `data` on the bus.
+            if let Err(e) = serde_json::from_str::<serde_json::Value>(&data) {
+                return CtlResponse::Error {
+                    message: format!("widget: invalid JSON data: {e}"),
+                };
+            }
+            state.bus.publish(Event::WidgetActionReceived {
+                widget_id,
+                action,
+                data,
+            });
+            CtlResponse::Ok
+        }
+
+        CtlRequest::Notify {
+            title,
+            body,
+            urgency,
+        } => {
+            state.bus.publish(Event::NotifyRequested {
+                title,
+                body,
+                urgency: urgency.as_wire().to_owned(),
+            });
+            CtlResponse::Ok
+        }
+
+        CtlRequest::AnkiDueCount => match AnkiDueModule::due_count(&state.store).await {
+            Ok(n) => CtlResponse::Count { count: n as u64 },
+            Err(e) => CtlResponse::Error {
+                message: format!("anki due-count: {e}"),
+            },
+        },
 
         // `CtlRequest` is `#[non_exhaustive]`, so future variants land here
         // as a soft rejection instead of breaking the build.
@@ -952,3 +1010,64 @@ fn ctl_error_from_registry(e: ProjectRegistryError) -> CtlResponse {
 // need to depend directly on private imports.
 #[doc(hidden)]
 pub type _IpcConnection = IpcConnection<JsonCodec>;
+
+#[cfg(test)]
+mod route_tests {
+    use super::*;
+    use levshell_core::EventKind;
+    use levshell_ipc::WidgetAction;
+
+    #[test]
+    fn unhandled_widget_action_routes_to_bus_event() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe("t", [EventKind::WidgetActionReceived], 4);
+
+        route_shell_message(
+            &bus,
+            ShellMessage::WidgetAction(WidgetAction {
+                widget_id: "ssh-dashboard".into(),
+                action: "reconnect".into(),
+                data: serde_json::json!({ "host": "gpu-3" }),
+            }),
+        );
+
+        match rx.try_recv().expect("expected a WidgetActionReceived event") {
+            Event::WidgetActionReceived {
+                widget_id,
+                action,
+                data,
+            } => {
+                assert_eq!(widget_id, "ssh-dashboard");
+                assert_eq!(action, "reconnect");
+                let v: serde_json::Value = serde_json::from_str(&data).unwrap();
+                assert_eq!(v["host"], "gpu-3");
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn special_cased_widget_action_does_not_become_generic_event() {
+        // The cpu sniper has dedicated handling — it must NOT also fan
+        // out as a generic WidgetActionReceived (which would double-fire
+        // a future generic subscriber).
+        let bus = EventBus::new();
+        let mut generic = bus.subscribe("g", [EventKind::WidgetActionReceived], 4);
+        let mut sniper = bus.subscribe("s", [EventKind::ProcessListRequested], 4);
+
+        route_shell_message(
+            &bus,
+            ShellMessage::WidgetAction(WidgetAction {
+                widget_id: "cpu".into(),
+                action: "list_processes".into(),
+                data: serde_json::Value::Null,
+            }),
+        );
+
+        assert!(matches!(
+            sniper.try_recv(),
+            Ok(Event::ProcessListRequested)
+        ));
+        assert!(generic.try_recv().is_err(), "should not double-route");
+    }
+}

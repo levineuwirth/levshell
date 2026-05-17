@@ -140,6 +140,60 @@ pub enum CtlRequest {
 
     /// Open / close / reset the rubber-duck overlay (spec §2.12.6).
     Duck { action: DuckAction },
+
+    /// Count flashcards currently due (`due_at <= now`). Spec §2.19.1
+    /// (`levshell-ctl anki due-count`); the daemon replies
+    /// [`CtlResponse::Count`].
+    AnkiDueCount,
+
+    /// Forward a generic widget action onto the daemon bus (spec §2.19.1,
+    /// e.g. `levshell-ctl widget ssh-dashboard reconnect host=gpu-3`).
+    /// `data` is a JSON object string assembled by the ctl client from
+    /// `key=value` params; it defaults to `"{}"` when no params are given.
+    /// The daemon publishes `Event::WidgetActionReceived` and replies
+    /// [`CtlResponse::Ok`] — delivery is fire-and-forget.
+    Widget {
+        widget_id: String,
+        action: String,
+        #[serde(default = "default_widget_data")]
+        data: String,
+    },
+
+    /// Emit a desktop notification (spec §2.19.1, e.g.
+    /// `levshell-ctl notify "Build finished" --urgency normal`).
+    Notify {
+        title: String,
+        body: String,
+        #[serde(default)]
+        urgency: NotifyUrgency,
+    },
+}
+
+fn default_widget_data() -> String {
+    "{}".to_string()
+}
+
+/// Desktop-notification urgency for [`CtlRequest::Notify`]. Mirrors the
+/// three Freedesktop urgency levels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum NotifyUrgency {
+    Low,
+    #[default]
+    Normal,
+    Critical,
+}
+
+impl NotifyUrgency {
+    /// The lowercase wire string the daemon and `notify-rust` expect.
+    pub fn as_wire(self) -> &'static str {
+        match self {
+            NotifyUrgency::Low => "low",
+            NotifyUrgency::Normal => "normal",
+            NotifyUrgency::Critical => "critical",
+        }
+    }
 }
 
 /// What to do with the rubber-duck overlay. See [`CtlRequest::Duck`].
@@ -214,6 +268,11 @@ pub enum CtlResponse {
     /// [`ContextSnapshotAction::List`].
     ContextSnapshots {
         names: Vec<String>,
+    },
+    /// A scalar count. Returned for [`CtlRequest::AnkiDueCount`]
+    /// (spec §2.19.1, `levshell-ctl anki due-count`).
+    Count {
+        count: u64,
     },
 }
 

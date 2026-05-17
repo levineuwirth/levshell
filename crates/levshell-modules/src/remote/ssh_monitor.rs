@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use levshell_core::{Event, EventBus, Module, ModuleResult, WidgetDescriptor};
+use levshell_core::{Event, EventBus, EventKind, Module, ModuleResult, WidgetDescriptor};
 use levshell_ipc::{DaemonMessage, EscalationLevel, WidgetPublisher, WidgetStatus, WidgetUpdate};
 
 use crate::escalation::EscalationTracker;
@@ -263,6 +263,36 @@ impl Module for SshMonitorModule {
         Some(self.poll_interval)
     }
 
+    fn subscribed_events(&self) -> Vec<EventKind> {
+        vec![EventKind::WidgetActionReceived]
+    }
+
+    /// One-click reconnect (spec §2.10.1). The daemon can't re-establish
+    /// a user's SSH session, but it can immediately re-probe so a host
+    /// that just came back clears its offline/stale state without waiting
+    /// for the next 30s tick. `data.host` is logged but the whole fleet
+    /// is re-probed — a single cheap pass that also refreshes neighbours.
+    async fn on_event(&mut self, event: &Event) -> ModuleResult<()> {
+        if let Event::WidgetActionReceived {
+            widget_id,
+            action,
+            data,
+        } = event
+        {
+            if widget_id == SSH_WIDGET_ID && action == "reconnect" {
+                let host = serde_json::from_str::<serde_json::Value>(data)
+                    .ok()
+                    .and_then(|v| v.get("host").and_then(|h| h.as_str()).map(str::to_owned));
+                tracing::info!(
+                    host = host.as_deref().unwrap_or("<all>"),
+                    "ssh-monitor: reconnect requested — re-probing fleet"
+                );
+                self.run_once().await?;
+            }
+        }
+        Ok(())
+    }
+
     async fn start(&mut self) -> ModuleResult<()> {
         if self.hosts().is_empty() {
             // Dormant: declared host registry but no ssh_monitor
@@ -485,5 +515,44 @@ mod tests {
         let calls = mock.calls();
         let hosts: Vec<_> = calls.iter().map(|c| c.0.as_str()).collect();
         assert_eq!(hosts, vec!["a"]);
+    }
+
+    #[tokio::test]
+    async fn reconnect_action_triggers_immediate_reprobe() {
+        let bus = EventBus::new();
+        let reg = HostRegistry::new(vec![host("a", vec![HostRole::SshMonitor])]);
+        let mock = Arc::new(MockRunner::new());
+        mock.respond(
+            "a",
+            &["true"],
+            CommandOutput {
+                stdout: String::new(),
+                stderr: String::new(),
+                status: Some(0),
+            },
+        );
+        let writer = writer().await;
+        let mut m =
+            SshMonitorModule::new(Arc::new(reg), mock.clone(), writer.publisher, bus);
+
+        // A reconnect for our widget re-probes immediately.
+        m.on_event(&Event::WidgetActionReceived {
+            widget_id: SSH_WIDGET_ID.into(),
+            action: "reconnect".into(),
+            data: r#"{"host":"a"}"#.into(),
+        })
+        .await
+        .unwrap();
+        assert_eq!(mock.calls().len(), 1, "reconnect should probe once");
+
+        // An unrelated widget action is a no-op.
+        m.on_event(&Event::WidgetActionReceived {
+            widget_id: "some-other-widget".into(),
+            action: "reconnect".into(),
+            data: "{}".into(),
+        })
+        .await
+        .unwrap();
+        assert_eq!(mock.calls().len(), 1, "non-ssh action must not probe");
     }
 }

@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use levshell_core::{Event, EventKind, Module, ModuleResult};
-use levshell_ipc::{CriticalEscalation, DaemonMessage, WidgetPublisher};
+use levshell_ipc::{CriticalEscalation, DaemonMessage, Nudge, WidgetPublisher};
 
 const MODULE_NAME: &str = "notifications";
 
@@ -43,6 +43,14 @@ pub trait NotificationSender: Send + Sync {
     /// Freedesktop path, which `levshell`'s own NotificationServer owns,
     /// so the nudge lands in the notification center / popup.
     fn send_nudge(&self, kind: &str, title: &str) -> Result<(), String>;
+
+    /// Surface a generic, ctl-originated notification (spec §2.19.1,
+    /// `levshell-ctl notify ...`). `urgency` is `"low"`, `"normal"`, or
+    /// `"critical"`. The default impl is a no-op so test doubles and
+    /// future senders need not implement it explicitly.
+    fn send_notify(&self, _urgency: &str, _title: &str, _body: &str) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 /// Production sender: invokes `notify-rust`.
@@ -73,6 +81,21 @@ impl NotificationSender for NotifyRustSender {
             .map(|_| ())
             .map_err(|e| e.to_string())
     }
+
+    fn send_notify(&self, urgency: &str, title: &str, body: &str) -> Result<(), String> {
+        let u = match urgency {
+            "low" => notify_rust::Urgency::Low,
+            "critical" => notify_rust::Urgency::Critical,
+            _ => notify_rust::Urgency::Normal,
+        };
+        notify_rust::Notification::new()
+            .summary(title)
+            .body(body)
+            .urgency(u)
+            .show()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
 }
 
 pub struct NotificationsModule {
@@ -98,7 +121,11 @@ impl Module for NotificationsModule {
     }
 
     fn subscribed_events(&self) -> Vec<EventKind> {
-        vec![EventKind::CriticalEscalation, EventKind::NudgeDelivered]
+        vec![
+            EventKind::CriticalEscalation,
+            EventKind::NudgeDelivered,
+            EventKind::NotifyRequested,
+        ]
     }
 
     async fn on_event(&mut self, event: &Event) -> ModuleResult<()> {
@@ -128,15 +155,42 @@ impl Module for NotificationsModule {
                     );
                 }
             }
-            // Ideation nudges have no dedicated DaemonMessage; the
-            // Freedesktop path (owned by levshell's own
-            // NotificationServer) is the delivery surface.
+            // Ideation nudges go out two ways: the Freedesktop path
+            // (for the notification center / other daemons) AND a
+            // dedicated DaemonMessage::Nudge so the shell can show a
+            // transient toast even when another daemon owns
+            // org.freedesktop.Notifications (spec §2.9.2).
             Event::NudgeDelivered { kind, title, .. } => {
+                if let Err(e) = self.publisher.try_send(DaemonMessage::Nudge(Nudge {
+                    kind: kind.clone(),
+                    title: title.clone(),
+                })) {
+                    tracing::warn!(
+                        error = %e,
+                        kind = %kind,
+                        "notifications: nudge shell channel drop"
+                    );
+                }
                 if let Err(e) = self.sender.send_nudge(kind, title) {
                     tracing::warn!(
                         error = %e,
                         kind = %kind,
                         "notifications: nudge send failed"
+                    );
+                }
+            }
+            // Generic ctl-originated notification (spec §2.19.1). No
+            // DaemonMessage — the Freedesktop path is the surface, same
+            // as nudges.
+            Event::NotifyRequested {
+                title,
+                body,
+                urgency,
+            } => {
+                if let Err(e) = self.sender.send_notify(urgency, title, body) {
+                    tracing::warn!(
+                        error = %e,
+                        "notifications: ctl notify send failed"
                     );
                 }
             }
@@ -156,6 +210,7 @@ mod tests {
     struct SpySender {
         calls: Mutex<Vec<(String, String, String)>>,
         nudges: Mutex<Vec<(String, String)>>,
+        notifies: Mutex<Vec<(String, String, String)>>,
         result: Mutex<Result<(), String>>,
     }
 
@@ -164,6 +219,7 @@ mod tests {
             Self {
                 calls: Mutex::new(Vec::new()),
                 nudges: Mutex::new(Vec::new()),
+                notifies: Mutex::new(Vec::new()),
                 result: Mutex::new(result),
             }
         }
@@ -174,6 +230,10 @@ mod tests {
 
         fn nudges(&self) -> Vec<(String, String)> {
             self.nudges.lock().unwrap().clone()
+        }
+
+        fn notifies(&self) -> Vec<(String, String, String)> {
+            self.notifies.lock().unwrap().clone()
         }
     }
 
@@ -197,6 +257,20 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((kind.to_string(), title.to_string()));
+            self.result.lock().unwrap().clone()
+        }
+
+        fn send_notify(
+            &self,
+            urgency: &str,
+            title: &str,
+            body: &str,
+        ) -> Result<(), String> {
+            self.notifies.lock().unwrap().push((
+                urgency.to_string(),
+                title.to_string(),
+                body.to_string(),
+            ));
             self.result.lock().unwrap().clone()
         }
     }
@@ -236,6 +310,28 @@ mod tests {
         });
         let module = NotificationsModule::new(task.publisher, spy);
         (module, fwd_rx)
+    }
+
+    #[tokio::test]
+    async fn on_event_forwards_notify_to_sender() {
+        let spy = Arc::new(SpySender::with_result(Ok(())));
+        let (mut module, _fwd) = module_with_spy(spy.clone()).await;
+        module
+            .on_event(&Event::NotifyRequested {
+                title: "Build finished".into(),
+                body: "cargo build: ok".into(),
+                urgency: "normal".into(),
+            })
+            .await
+            .unwrap();
+
+        let n = spy.notifies();
+        assert_eq!(n.len(), 1);
+        assert_eq!(n[0].0, "normal");
+        assert_eq!(n[0].1, "Build finished");
+        assert_eq!(n[0].2, "cargo build: ok");
+        // A generic notify is not a critical escalation — no DaemonMessage.
+        assert!(spy.calls().is_empty());
     }
 
     #[tokio::test]
@@ -308,15 +404,16 @@ mod tests {
         let task = spawn_writer_task(w, 4);
         let m = NotificationsModule::new(task.publisher, spy);
         let subs = m.subscribed_events();
-        assert_eq!(subs.len(), 2);
+        assert_eq!(subs.len(), 3);
         assert!(subs.contains(&EventKind::CriticalEscalation));
         assert!(subs.contains(&EventKind::NudgeDelivered));
+        assert!(subs.contains(&EventKind::NotifyRequested));
     }
 
     #[tokio::test]
-    async fn on_event_forwards_nudge_to_sender() {
+    async fn on_event_forwards_nudge_to_sender_and_shell() {
         let spy = Arc::new(SpySender::with_result(Ok(())));
-        let (mut module, _fwd) = module_with_spy(spy.clone()).await;
+        let (mut module, mut fwd) = module_with_spy(spy.clone()).await;
         module
             .on_event(&Event::NudgeDelivered {
                 project_id: uuid::Uuid::nil(),
@@ -331,5 +428,22 @@ mod tests {
         assert_eq!(nudges[0].1, "Revisit the attention-sparsity assumption");
         // Nudges must NOT go through the critical sender/publisher.
         assert!(spy.calls().is_empty());
+
+        // …but they DO get a dedicated DaemonMessage::Nudge so the shell
+        // can toast even when another daemon owns Freedesktop (§2.9.2).
+        let msg = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            fwd.recv(),
+        )
+        .await
+        .expect("expected DaemonMessage within 200ms")
+        .expect("channel open");
+        match msg {
+            DaemonMessage::Nudge(n) => {
+                assert_eq!(n.kind, "open_question");
+                assert_eq!(n.title, "Revisit the attention-sparsity assumption");
+            }
+            other => panic!("unexpected DaemonMessage: {other:?}"),
+        }
     }
 }

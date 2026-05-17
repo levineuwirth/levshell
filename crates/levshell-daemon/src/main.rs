@@ -11,8 +11,8 @@ use anyhow::Result;
 use levshell_config::{load_profiles_from_dir, spawn_profile_watcher};
 use levshell_daemon::{init_tracing, run_with_sync, DaemonConfig, ModuleFactory, SyncAdapterFactory};
 use levshell_modules::{
-    default_context_engine, default_warmup_state_path, AppLauncherProvider, BatteryModule,
-    ClockModule, ProcessSniperModule,
+    default_context_engine, default_warmup_state_path, AnkiDueModule, AppLauncherProvider,
+    BatteryModule, ClockModule, ProcessSniperModule,
     CpuModule, FocusModeModule, GpuDashboardModule, HostRegistry, IdeationModule,
     InterruptionCostModule, MemoryModule, NetworkModule, NotificationsModule, NoteSearchProvider,
     PaletteModule, PaletteProvider, RemoteJobsModule, RemoteRunner, RubberDuckConfig,
@@ -201,6 +201,7 @@ async fn main() -> Result<()> {
             // Constructed before `store` is moved into warmup / before
             // `publisher` is moved into NetworkModule in the vec below.
             let clock = ClockModule::new(store.clone(), publisher.clone());
+            let anki_due = AnkiDueModule::new(store.clone(), publisher.clone());
             let proc_sniper = ProcessSniperModule::new(publisher.clone());
             let warmup = WarmupModule::with_config(
                 publisher.clone(),
@@ -251,6 +252,7 @@ async fn main() -> Result<()> {
                 Box::new(palette) as Box<dyn levshell_core::Module>,
                 Box::new(ideation) as Box<dyn levshell_core::Module>,
                 Box::new(clock) as Box<dyn levshell_core::Module>,
+                Box::new(anki_due) as Box<dyn levshell_core::Module>,
                 Box::new(proc_sniper) as Box<dyn levshell_core::Module>,
                 Box::new(warmup) as Box<dyn levshell_core::Module>,
                 Box::new(rubber_duck) as Box<dyn levshell_core::Module>,
