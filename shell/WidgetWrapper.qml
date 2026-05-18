@@ -58,6 +58,16 @@ Item {
     // "critical". Default "ambient" renders exactly as pre-§9 widgets.
     property string escalation: "ambient"
 
+    // Spec §10 focus/quiet mode. Set by the shell when a deep-work
+    // session is running OR presentation mode is on. A quiet widget
+    // recedes into the muted token set — same desaturation pathway as
+    // a degraded widget, *no* opacity change (readability is never
+    // compromised). Escalated widgets ignore `quiet` entirely: the
+    // escalation > everything stacking rule below short-circuits to
+    // full-saturation state colors before the recede branch, so a
+    // Critical alert still cuts through a focus session.
+    property bool quiet: false
+
     // Opt-in click affordance (spec §7.1). When true, the wrapper renders
     // a full-bleed hover wash *behind* the content and a click target
     // *above* it, and emits `clicked()`. This chrome lives on `root`, not
@@ -84,20 +94,25 @@ Item {
     // =================================================================
     readonly property bool degraded: status === "stale" || status === "error"
     readonly property bool escalated: escalation === "attention" || escalation === "critical"
+    // A non-escalated widget recedes when it's degraded OR the shell is
+    // in quiet mode (deep-work session / presentation). Escalated
+    // widgets never recede — they're handled by the short-circuits
+    // above this in each getter.
+    readonly property bool recede: (degraded || quiet) && !escalated
 
     readonly property color contentColor: {
         if (escalation === "critical")  return Theme.error;
         if (escalation === "attention") return Theme.warning;
-        return degraded ? Theme.fgMuted : Theme.fg;
+        return recede ? Theme.fgMuted : Theme.fg;
     }
     readonly property color accentColor: {
         if (escalation === "critical")  return Theme.error;
         if (escalation === "attention") return Theme.warning;
-        return degraded ? Theme.outline : Theme.primary;
+        return recede ? Theme.outline : Theme.primary;
     }
     readonly property color subtleColor: {
         if (escalated) return contentColor;
-        return degraded ? Theme.fgMuted : Theme.fgSubtle;
+        return recede ? Theme.fgMuted : Theme.fgSubtle;
     }
 
     // Target width is content-driven per §5 / §7: the wrapper measures
