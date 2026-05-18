@@ -104,9 +104,9 @@ Rectangle {
     // =================================================================
     // LAYOUT CONSTANTS
     // =================================================================
-    readonly property int searchRowHeight:     48
-    readonly property int resultRowHeight:     44
-    readonly property int sectionHeaderHeight: 22
+    readonly property int searchRowHeight:     Math.round(48 * Theme.uiScale)
+    readonly property int resultRowHeight:     Math.round(44 * Theme.uiScale)
+    readonly property int sectionHeaderHeight: Math.round(22 * Theme.uiScale)
 
     // =================================================================
     // CARD DIMENSIONS & CHROME
@@ -116,14 +116,14 @@ Rectangle {
     // that, the ListView scrolls within the fixed frame.
     // =================================================================
     readonly property int maxCardHeight: Math.min(
-        540,
+        Math.round(540 * Theme.uiScale),
         Math.floor(Screen.height * 0.5)
     )
     readonly property int chromeHeight: searchRowHeight
                                       + 2 * Theme.panelInnerPadding
                                       + Theme.spaceMd
 
-    implicitWidth: 640
+    implicitWidth: Math.round(640 * Theme.uiScale)
     implicitHeight: {
         const rowsHeight = displayedResults.length * resultRowHeight;
         const sectionsHeight = sectionCount * sectionHeaderHeight;
@@ -443,8 +443,8 @@ Rectangle {
                     // provider-supplied `icon` category hint.
                     Item {
                         id: iconSlot
-                        width: 24
-                        height: 24
+                        width: Math.round(24 * Theme.uiScale)
+                        height: Math.round(24 * Theme.uiScale)
                         anchors.verticalCenter: parent.verticalCenter
 
                         readonly property string resolvedIconPath: resultRow.modelData
@@ -461,8 +461,8 @@ Rectangle {
                             source: iconSlot.resolvedIconPath.length > 0
                                     ? "file://" + iconSlot.resolvedIconPath
                                     : ""
-                            sourceSize.width:  24
-                            sourceSize.height: 24
+                            sourceSize.width:  Math.round(24 * Theme.uiScale)
+                            sourceSize.height: Math.round(24 * Theme.uiScale)
                             fillMode: Image.PreserveAspectFit
                             smooth: true
                             asynchronous: true
@@ -478,14 +478,14 @@ Rectangle {
                             visible: !iconSlot.iconLoaded
                             text: root.iconFor(resultRow.modelData.icon)
                             color: Theme.primary
-                            font.pixelSize: 24
+                            font.pixelSize: Math.round(24 * Theme.uiScale)
                         }
                     }
 
                     Column {
                         anchors.verticalCenter: parent.verticalCenter
                         spacing: 0
-                        width: parent.width - 24 - Theme.spaceMd
+                        width: parent.width - Math.round(24 * Theme.uiScale) - Theme.spaceMd
 
                         Text {
                             width: parent.width

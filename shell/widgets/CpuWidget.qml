@@ -35,7 +35,7 @@ WidgetWrapper {
         Sparkline {
             anchors.verticalCenter: parent.verticalCenter
             height: Theme.iconSize
-            width: 40
+            width: Math.round(40 * Theme.uiScale)
             values: root.history
             maxValue: 100
             lineColor: root.accentColor

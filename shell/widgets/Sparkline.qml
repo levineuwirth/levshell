@@ -16,7 +16,7 @@ Canvas {
     property color lineColor: Theme.primary
     property real lineWidth: 1.5
 
-    implicitWidth: 40
+    implicitWidth: Math.round(40 * Theme.uiScale)
     implicitHeight: Theme.iconSize
 
     onValuesChanged: requestPaint()

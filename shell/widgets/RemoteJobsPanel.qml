@@ -20,7 +20,7 @@ Rectangle {
     property var payload: ({ hosts: [] })
     readonly property var hosts: (payload && payload.hosts) || []
 
-    implicitWidth: 400
+    implicitWidth: Math.round(400 * Theme.uiScale)
     implicitHeight: col.implicitHeight + 2 * Theme.panelInnerPadding
 
     color: Qt.rgba(Theme.surface.r, Theme.surface.g, Theme.surface.b,
@@ -151,7 +151,7 @@ Rectangle {
                         id: jobRow
                         required property var modelData
                         width: hostSection.width
-                        height: 32
+                        height: Math.round(32 * Theme.uiScale)
 
                         readonly property color stateColor:
                             modelData.state === "RUNNING" ? Theme.success
@@ -165,7 +165,7 @@ Rectangle {
 
                             Text {
                                 anchors.verticalCenter: parent.verticalCenter
-                                width: 64
+                                width: Math.round(64 * Theme.uiScale)
                                 elide: Text.ElideRight
                                 text: jobRow.modelData.state
                                 color: jobRow.stateColor
@@ -174,7 +174,7 @@ Rectangle {
                             }
                             Column {
                                 anchors.verticalCenter: parent.verticalCenter
-                                width: parent.width - 64 - timeT.width - 2 * Theme.spaceSm
+                                width: parent.width - Math.round(64 * Theme.uiScale) - timeT.width - 2 * Theme.spaceSm
                                 spacing: 1
                                 Text {
                                     width: parent.width
@@ -199,7 +199,7 @@ Rectangle {
                             Text {
                                 id: timeT
                                 anchors.verticalCenter: parent.verticalCenter
-                                width: 96
+                                width: Math.round(96 * Theme.uiScale)
                                 horizontalAlignment: Text.AlignRight
                                 text: jobRow.modelData.time_used
                                       + " / " + jobRow.modelData.time_limit

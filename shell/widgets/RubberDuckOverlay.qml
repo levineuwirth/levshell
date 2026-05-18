@@ -25,8 +25,8 @@ Rectangle {
     signal dismissed()
     signal submit(string text)
 
-    implicitWidth: 640
-    implicitHeight: 560
+    implicitWidth: Math.round(640 * Theme.uiScale)
+    implicitHeight: Math.round(560 * Theme.uiScale)
 
     color: Qt.rgba(Theme.surface.r, Theme.surface.g, Theme.surface.b,
                    Theme.onBattery ? Theme.barOpacityBattery : Theme.barOpacity)
@@ -189,7 +189,7 @@ Rectangle {
             Rectangle {
                 id: inputBox
                 width: parent.width - sendButton.width - Theme.spaceMd
-                height: 40
+                height: Math.round(40 * Theme.uiScale)
                 radius: Theme.panelCornerRadius
                 color: Qt.rgba(Theme.fg.r, Theme.fg.g, Theme.fg.b, 0.06)
                 border.width: input.activeFocus ? 1 : 0
@@ -233,7 +233,7 @@ Rectangle {
             Rectangle {
                 id: sendButton
                 width: sendLabel.implicitWidth + 2 * Theme.spaceMd
-                height: 40
+                height: Math.round(40 * Theme.uiScale)
                 radius: Theme.panelCornerRadius
                 color: root.streaming ? Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.4)
                                       : Theme.primary

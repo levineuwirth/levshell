@@ -122,9 +122,9 @@ Rectangle {
     // =================================================================
     // LAYOUT CONSTANTS
     // =================================================================
-    readonly property int headerHeight: 40
-    readonly property int entryMinHeight: 64
-    readonly property int sectionHeaderHeight: 22
+    readonly property int headerHeight: Math.round(40 * Theme.uiScale)
+    readonly property int entryMinHeight: Math.round(64 * Theme.uiScale)
+    readonly property int sectionHeaderHeight: Math.round(22 * Theme.uiScale)
 
     // =================================================================
     // CARD DIMENSIONS & CHROME (§12.3)
@@ -134,7 +134,7 @@ Rectangle {
         Math.floor(Screen.height * 0.5)
     )
 
-    implicitWidth: 460
+    implicitWidth: Math.round(460 * Theme.uiScale)
     implicitHeight: {
         const content = headerHeight + Theme.spaceMd
                       + displayedNotifs.length * entryMinHeight
@@ -253,8 +253,8 @@ Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.right: parent.right
                 width: dndLabel.implicitWidth + 2 * Theme.spaceMd + dndIcon.implicitWidth + Theme.spaceSm
-                height: 28
-                radius: 14
+                height: Math.round(28 * Theme.uiScale)
+                radius: height / 2
                 color: root.doNotDisturb ? Theme.primary : Theme.surfaceRaised
                 border.width: root.doNotDisturb ? 0 : 1
                 border.color: Theme.outline
@@ -273,7 +273,7 @@ Rectangle {
                         text: Theme.iconBellSlash
                         color: root.doNotDisturb ? Theme.textOnPrimary : Theme.fgSubtle
                         font.family: Theme.fontIcon
-                        font.pixelSize: 14
+                        font.pixelSize: Math.round(14 * Theme.uiScale)
                     }
 
                     Text {
@@ -372,8 +372,8 @@ Rectangle {
 
                     // App icon or Phosphor fallback.
                     Item {
-                        width: 28
-                        height: 28
+                        width: Math.round(28 * Theme.uiScale)
+                        height: Math.round(28 * Theme.uiScale)
                         anchors.top: parent.top
 
                         Image {
@@ -385,8 +385,8 @@ Rectangle {
                                 if (icon.startsWith("/")) return "file://" + icon;
                                 return "";
                             }
-                            sourceSize.width:  28
-                            sourceSize.height: 28
+                            sourceSize.width:  Math.round(28 * Theme.uiScale)
+                            sourceSize.height: Math.round(28 * Theme.uiScale)
                             fillMode: Image.PreserveAspectFit
                             smooth: true
                             asynchronous: true
@@ -398,14 +398,14 @@ Rectangle {
                             text: Theme.iconAppWindow
                             color: Theme.primary
                             font.family: Theme.fontIcon
-                            font.pixelSize: 20
+                            font.pixelSize: Theme.iconSize
                         }
                     }
 
                     // Text column: summary, body, timestamp, actions.
                     Column {
-                        width: parent.width - 28 - Theme.spaceMd - entryControls.width - Theme.spaceSm
-                        spacing: 2
+                        width: parent.width - Math.round(28 * Theme.uiScale) - Theme.spaceMd - entryControls.width - Theme.spaceSm
+                        spacing: Math.round(2 * Theme.uiScale)
 
                         // Summary + timestamp row.
                         Row {
@@ -456,8 +456,8 @@ Rectangle {
                                 delegate: Rectangle {
                                     required property var modelData
                                     width: actionLabel.implicitWidth + 2 * Theme.spaceMd
-                                    height: 24
-                                    radius: 4
+                                    height: Math.round(24 * Theme.uiScale)
+                                    radius: Math.round(4 * Theme.uiScale)
                                     color: Theme.surfaceRaised
                                     border.width: 1
                                     border.color: Theme.outline
@@ -489,8 +489,8 @@ Rectangle {
 
                             Rectangle {
                                 width: parent.width - sendBtn.width - Theme.spaceSm
-                                height: 28
-                                radius: 4
+                                height: Math.round(28 * Theme.uiScale)
+                                radius: Math.round(4 * Theme.uiScale)
                                 color: Theme.surfaceRaised
                                 border.width: 1
                                 border.color: replyInput.activeFocus ? Theme.primary : Theme.outline
@@ -516,16 +516,16 @@ Rectangle {
 
                             Rectangle {
                                 id: sendBtn
-                                width: 28
-                                height: 28
-                                radius: 4
+                                width: Math.round(28 * Theme.uiScale)
+                                height: Math.round(28 * Theme.uiScale)
+                                radius: Math.round(4 * Theme.uiScale)
                                 color: Theme.primary
 
                                 Text {
                                     anchors.centerIn: parent
                                     text: "\u2192"
                                     color: Theme.textOnPrimary
-                                    font.pixelSize: 14
+                                    font.pixelSize: Math.round(14 * Theme.uiScale)
                                 }
 
                                 MouseArea {
@@ -557,7 +557,7 @@ Rectangle {
                                    ? Theme.primary
                                    : (entryHover.containsMouse ? Theme.fgSubtle : "transparent")
                             font.family: Theme.fontText
-                            font.pixelSize: 14
+                            font.pixelSize: Math.round(14 * Theme.uiScale)
                             Behavior on color { ColorAnimation { duration: Theme.motionFast } }
                             MouseArea {
                                 anchors.fill: parent
@@ -575,7 +575,7 @@ Rectangle {
                             text: Theme.iconClockCountdown
                             color: entryHover.containsMouse ? Theme.fgSubtle : "transparent"
                             font.family: Theme.fontIcon
-                            font.pixelSize: 14
+                            font.pixelSize: Math.round(14 * Theme.uiScale)
                             Behavior on color { ColorAnimation { duration: Theme.motionFast } }
                             MouseArea {
                                 anchors.fill: parent
@@ -592,7 +592,7 @@ Rectangle {
                             text: Theme.iconX
                             color: entryHover.containsMouse ? Theme.fg : "transparent"
                             font.family: Theme.fontIcon
-                            font.pixelSize: 14
+                            font.pixelSize: Math.round(14 * Theme.uiScale)
                             Behavior on color { ColorAnimation { duration: Theme.motionFast } }
                             MouseArea {
                                 anchors.fill: parent
@@ -608,8 +608,8 @@ Rectangle {
                         anchors.left: parent.left
                         anchors.top: parent.top
                         anchors.bottom: parent.bottom
-                        width: 2
-                        radius: 1
+                        width: Math.round(2 * Theme.uiScale)
+                        radius: Math.round(1 * Theme.uiScale)
                         color: Theme.primary
                         visible: entry.modelData.pinned
                     }

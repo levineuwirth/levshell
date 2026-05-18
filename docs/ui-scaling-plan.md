@@ -1,7 +1,13 @@
 # Levshell UI scaling — design & implementation plan
 
-Status: **Phase 1 + Phase 2 implemented** (2026-05-18, branch
-`feat/ui-scaling`). Phase 3 (hardcoded-literal sweep) still deferred.
+Status: **Phase 1 + 2 + 3 implemented** (2026-05-18, branch
+`feat/ui-scaling`). All 70 size-bearing literals across 16 widget
+files swept: each now `Math.round(N * Theme.uiScale)`, an exact Theme
+type/icon token where one matched the base value, or `radius:
+height/2` / `width/2` for pills & circles. Sibling layout math, slider
+tracks, and hit-area margins scaled for coherence; 1px hairlines,
+`z`, durations, opacities left invariant. Verified loading clean and
+visually coherent at 1.75× and 2× (live via `levshell-ctl scale`).
 
 Implemented design notes (where it diverged from the original plan):
 - `config/levshell.toml` turned out to be a non-functional Phase-0 stub
@@ -28,8 +34,8 @@ No daemon-restart needed to change scale (live via ctl). A sway
 keybind (`$mod+Shift+plus exec levshell-ctl scale cycle`) is left to
 the user's sway config, like the density bind.
 
-Original plan follows (kept for the Phase 3 literal table / sweep
-guidance, which is still accurate and outstanding):
+Original plan follows (kept for historical/design context; the Phase 3
+literal table is now fully addressed):
 
 ## Problem
 

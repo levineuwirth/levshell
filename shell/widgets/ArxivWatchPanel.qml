@@ -20,7 +20,7 @@ Rectangle {
 
     signal openPaper(string url)
 
-    implicitWidth: 420
+    implicitWidth: Math.round(420 * Theme.uiScale)
     implicitHeight: col.implicitHeight + 2 * Theme.panelInnerPadding
 
     color: Qt.rgba(Theme.surface.r, Theme.surface.g, Theme.surface.b,

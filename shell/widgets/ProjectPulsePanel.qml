@@ -37,7 +37,7 @@ Rectangle {
         return d >= 0 ? s + " ago" : "in " + s;
     }
 
-    implicitWidth: 380
+    implicitWidth: Math.round(380 * Theme.uiScale)
     implicitHeight: col.implicitHeight + 2 * Theme.panelInnerPadding
 
     color: Qt.rgba(Theme.surface.r, Theme.surface.g, Theme.surface.b,
@@ -113,7 +113,7 @@ Rectangle {
                     id: prow
                     required property var modelData
                     width: parent.width
-                    height: 36
+                    height: Math.round(36 * Theme.uiScale)
                     opacity: prow.modelData.dormant ? 0.55 : 1.0
 
                     Row {
@@ -155,7 +155,7 @@ Rectangle {
                         Text {
                             id: metaT
                             anchors.verticalCenter: parent.verticalCenter
-                            width: 56
+                            width: Math.round(56 * Theme.uiScale)
                             horizontalAlignment: Text.AlignRight
                             text: Math.round((prow.modelData.focus_secs || 0) / 3600)
                                   + "h"
@@ -220,7 +220,7 @@ Rectangle {
                     Text {
                         id: dueT
                         anchors.verticalCenter: parent.verticalCenter
-                        width: 76
+                        width: Math.round(76 * Theme.uiScale)
                         horizontalAlignment: Text.AlignRight
                         text: root.relTime(drow.modelData.due)
                         color: drow.urgency

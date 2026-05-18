@@ -19,7 +19,7 @@ Rectangle {
     signal kill(int pid, string signal)
     signal refresh()
 
-    implicitWidth: 360
+    implicitWidth: Math.round(360 * Theme.uiScale)
     implicitHeight: col.implicitHeight + 2 * Theme.panelInnerPadding
 
     color: Qt.rgba(Theme.surface.r, Theme.surface.g, Theme.surface.b,
@@ -106,7 +106,7 @@ Rectangle {
                 delegate: Rectangle {
                     required property var modelData
                     width: parent.width
-                    height: 30
+                    height: Math.round(30 * Theme.uiScale)
                     radius: 4
                     color: rowHit.containsMouse ? Theme.surfaceRaised : "transparent"
 
@@ -128,7 +128,7 @@ Rectangle {
                         Text {
                             id: cpuT
                             anchors.verticalCenter: parent.verticalCenter
-                            width: 52
+                            width: Math.round(52 * Theme.uiScale)
                             horizontalAlignment: Text.AlignRight
                             text: Math.round(modelData.cpu_percent) + "%"
                             color: modelData.cpu_percent >= 60 ? Theme.warning : Theme.fgSubtle
@@ -139,7 +139,7 @@ Rectangle {
                         Text {
                             id: memT
                             anchors.verticalCenter: parent.verticalCenter
-                            width: 64
+                            width: Math.round(64 * Theme.uiScale)
                             horizontalAlignment: Text.AlignRight
                             text: (modelData.mem_kb / 1024).toFixed(0) + "M"
                             color: Theme.fgSubtle

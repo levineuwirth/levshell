@@ -25,12 +25,12 @@ Rectangle {
 
     signal dismissed()
 
-    implicitWidth: 520
+    implicitWidth: Math.round(520 * Theme.uiScale)
     implicitHeight: Math.min(
         header.implicitHeight + eventsSection.implicitHeight
         + ankiSection.implicitHeight + projectsSection.implicitHeight
         + dismissRow.implicitHeight + 5 * Theme.spaceLg,
-        720)
+        Math.round(720 * Theme.uiScale))
 
     color: Qt.rgba(Theme.surface.r, Theme.surface.g, Theme.surface.b,
                    Theme.onBattery ? Theme.barOpacityBattery : Theme.barOpacity)
@@ -186,7 +186,7 @@ Rectangle {
                     spacing: Theme.spaceMd
 
                     Text {
-                        width: 60
+                        width: Math.round(60 * Theme.uiScale)
                         text: root.formatTime(modelData.start_at)
                         color: Theme.fg
                         font.family: Theme.fontMono
@@ -195,8 +195,8 @@ Rectangle {
                         font.features: ({ "tnum": 1 })
                     }
                     Column {
-                        width: parent.width - 60 - Theme.spaceMd
-                        spacing: 2
+                        width: parent.width - Math.round(60 * Theme.uiScale) - Theme.spaceMd
+                        spacing: Math.round(2 * Theme.uiScale)
                         Text {
                             width: parent.width
                             text: modelData.title
@@ -230,7 +230,7 @@ Rectangle {
             spacing: Theme.spaceMd
 
             Column {
-                width: 60
+                width: Math.round(60 * Theme.uiScale)
                 spacing: 0
                 Text {
                     text: "DUE"
@@ -301,12 +301,12 @@ Rectangle {
                     spacing: Theme.spaceMd
 
                     Rectangle {
-                        width: 6; height: 6; radius: 3
+                        width: Math.round(6 * Theme.uiScale); height: Math.round(6 * Theme.uiScale); radius: height / 2
                         anchors.verticalCenter: parent.verticalCenter
                         color: root.statusColor(modelData.status)
                     }
                     Text {
-                        width: Math.min(260, projectsSection.width * 0.5)
+                        width: Math.min(Math.round(260 * Theme.uiScale), projectsSection.width * 0.5)
                         text: modelData.name
                         color: Theme.fg
                         font.family: Theme.fontText
@@ -322,7 +322,7 @@ Rectangle {
                         font.weight: Theme.typeCaptionWeight
                     }
                     Item {
-                        width: parent.width - 6 - Math.min(260, projectsSection.width * 0.5)
+                        width: parent.width - Math.round(6 * Theme.uiScale) - Math.min(Math.round(260 * Theme.uiScale), projectsSection.width * 0.5)
                             - 3 * Theme.spaceMd - idleLabel.implicitWidth
                         height: 1
                     }
@@ -347,7 +347,7 @@ Rectangle {
 
             Rectangle {
                 width: dismissText.implicitWidth + 2 * Theme.spaceMd
-                height: 32
+                height: Math.round(32 * Theme.uiScale)
                 radius: Theme.panelCornerRadius
                 color: Theme.primary
                 Text {

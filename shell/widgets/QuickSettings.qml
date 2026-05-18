@@ -419,7 +419,7 @@ Rectangle {
         }
     }
 
-    implicitWidth: 400
+    implicitWidth: Math.round(400 * Theme.uiScale)
     implicitHeight: contentCol.implicitHeight + 2 * Theme.panelInnerPadding
     Behavior on implicitHeight {
         NumberAnimation { duration: Theme.motionFast; easing.type: Easing.OutCubic }
@@ -481,14 +481,14 @@ Rectangle {
         signal moved(real v)
         signal released(real v)
 
-        implicitHeight: 18
+        implicitHeight: Math.round(18 * Theme.uiScale)
 
         Rectangle {
             id: track
             anchors.verticalCenter: parent.verticalCenter
             width: parent.width
-            height: 6
-            radius: 3
+            height: Math.round(6 * Theme.uiScale)
+            radius: height / 2
             color: Theme.surfaceRaised
 
             Rectangle {
@@ -522,7 +522,7 @@ Rectangle {
         property string trailing: ""
         property bool highlight: false
         width: parent ? parent.width : 0
-        height: 28
+        height: Math.round(28 * Theme.uiScale)
         radius: Theme.panelCornerRadius / 2
         color: highlight ? Qt.rgba(Theme.primary.r, Theme.primary.g,
                                    Theme.primary.b, 0.16) : "transparent"
@@ -578,7 +578,7 @@ Rectangle {
                     readonly property bool isExpanded:
                         root.expandedTile === modelData.id
                     width: (parent.width - Theme.spaceSm) / 2
-                    height: 56
+                    height: Math.round(56 * Theme.uiScale)
                     radius: Theme.panelCornerRadius
                     color: modelData.active ? Theme.primary : Theme.surfaceRaised
                     border.width: modelData.active ? 0
@@ -596,7 +596,7 @@ Rectangle {
                             text: tile.modelData.icon
                             color: tile.modelData.active ? Theme.textOnPrimary : Theme.fg
                             font.family: Theme.fontIcon
-                            font.pixelSize: 20
+                            font.pixelSize: Theme.iconSize
                         }
 
                         Text {
@@ -631,14 +631,14 @@ Rectangle {
                         color: tile.modelData.active ? Theme.textOnPrimary
                                                      : Theme.fgSubtle
                         font.family: Theme.fontIcon
-                        font.pixelSize: 13
+                        font.pixelSize: Math.round(13 * Theme.uiScale)
                         rotation: tile.isExpanded ? 180 : 0
                         Behavior on rotation {
                             NumberAnimation { duration: Theme.motionFast }
                         }
                         MouseArea {
                             anchors.fill: parent
-                            anchors.margins: -6   // easier to hit
+                            anchors.margins: -Math.round(6 * Theme.uiScale)   // easier to hit
                             enabled: tile.modelData.expandable
                             cursorShape: Qt.PointingHandCursor
                             onClicked: (e) => {
@@ -679,7 +679,7 @@ Rectangle {
                 // Header: title + refresh.
                 Item {
                     width: parent.width
-                    height: 22
+                    height: Math.round(22 * Theme.uiScale)
                     Text {
                         anchors.left: parent.left
                         anchors.verticalCenter: parent.verticalCenter
@@ -697,10 +697,10 @@ Rectangle {
                         text: Theme.iconMagnifyingGlass
                         color: Theme.fgSubtle
                         font.family: Theme.fontIcon
-                        font.pixelSize: 14
+                        font.pixelSize: Math.round(14 * Theme.uiScale)
                         MouseArea {
                             anchors.fill: parent
-                            anchors.margins: -6
+                            anchors.margins: -Math.round(6 * Theme.uiScale)
                             cursorShape: Qt.PointingHandCursor
                             onClicked: root.expandedTile === "wifi"
                                        ? root.scanWifi() : root.scanBt()
@@ -780,7 +780,7 @@ Rectangle {
 
             Text {
                 id: volIcon
-                width: 28
+                width: Math.round(28 * Theme.uiScale)
                 anchors.verticalCenter: parent.verticalCenter
                 horizontalAlignment: Text.AlignHCenter
                 text: root.audioMuted || !root.sinkReady
@@ -788,7 +788,7 @@ Rectangle {
                     : Theme.iconSpeakerHigh
                 color: root.sinkReady ? Theme.fg : Theme.fgSubtle
                 font.family: Theme.fontIcon
-                font.pixelSize: 20
+                font.pixelSize: Theme.iconSize
 
                 MouseArea {
                     anchors.fill: parent
@@ -817,13 +817,13 @@ Rectangle {
 
             Text {
                 id: brightIcon
-                width: 28
+                width: Math.round(28 * Theme.uiScale)
                 anchors.verticalCenter: parent.verticalCenter
                 horizontalAlignment: Text.AlignHCenter
                 text: Theme.iconSun
                 color: root.brightnessReady ? Theme.fg : Theme.fgSubtle
                 font.family: Theme.fontIcon
-                font.pixelSize: 20
+                font.pixelSize: Theme.iconSize
             }
 
             LevSlider {

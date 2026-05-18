@@ -22,7 +22,7 @@ Rectangle {
     // Emitted with the bare citekey (no leading @).
     signal copyCitekey(string citekey)
 
-    implicitWidth: 360
+    implicitWidth: Math.round(360 * Theme.uiScale)
     implicitHeight: col.implicitHeight + 2 * Theme.panelInnerPadding
 
     color: Qt.rgba(Theme.surface.r, Theme.surface.g, Theme.surface.b,
@@ -107,7 +107,7 @@ Rectangle {
                     id: rrow
                     required property var modelData
                     width: parent.width
-                    height: 38
+                    height: Math.round(38 * Theme.uiScale)
                     radius: 4
                     color: rhit.containsMouse ? Theme.surfaceRaised : "transparent"
 
