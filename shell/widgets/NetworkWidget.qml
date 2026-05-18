@@ -5,7 +5,9 @@
 //     "interfaces": [
 //       { "name": "wlan0", "rx_bps": 1024, "tx_bps": 256, "quality_percent": 75 },
 //       { "name": "eth0",  "rx_bps": 0,    "tx_bps": 0,    "quality_percent": null }
-//     ]
+//     ],
+//     "latency_ms": 42,
+//     "quality": "good"   // good | fair | poor | down | null (probe off)
 //   }
 
 import QtQuick
@@ -58,6 +60,22 @@ WidgetWrapper {
         return Theme.iconWifiHigh;
     }
 
+    // End-to-end reachability probe (spec §2.3.3). Distinct from the
+    // wifi-association bars above: a full-signal link behind a dead
+    // uplink still reads "poor"/"down".
+    readonly property string linkQuality: (widgetState && widgetState.quality) || ""
+    readonly property var latencyMs: widgetState ? widgetState.latency_ms : null
+
+    readonly property color dotColor: {
+        switch (linkQuality) {
+            case "good": return Theme.success;
+            case "fair": return Theme.warning;
+            case "poor":
+            case "down": return Theme.error;
+            default:      return "transparent";
+        }
+    }
+
     readonly property color qualityColor: {
         if (root.degraded) return root.contentColor;
         if (!primary || primary.quality_percent === null
@@ -73,12 +91,32 @@ WidgetWrapper {
         anchors.left: parent.left
         spacing: Theme.spaceSm
 
-        Text {
+        Item {
             anchors.verticalCenter: parent.verticalCenter
-            text: root.icon
-            color: root.qualityColor
-            font.family:    Theme.fontIcon
-            font.pixelSize: Theme.iconSize
+            width: icon.width
+            height: icon.height
+
+            Text {
+                id: icon
+                text: root.icon
+                color: root.qualityColor
+                font.family:    Theme.fontIcon
+                font.pixelSize: Theme.iconSize
+            }
+
+            // Reachability dot, bottom-right of the wifi/wired glyph.
+            // Hidden entirely when the probe is disabled (transparent).
+            Rectangle {
+                visible: root.linkQuality !== ""
+                width: 6
+                height: 6
+                radius: 3
+                color: root.dotColor
+                anchors.right: icon.right
+                anchors.bottom: icon.bottom
+                border.width: 1
+                border.color: Theme.bg
+            }
         }
 
         Text {
@@ -100,6 +138,20 @@ WidgetWrapper {
             font.weight: Theme.typeCaptionWeight
             font.features: ({ "tnum": 1 })
             visible: root.prominence !== "icon_only" && root.prominence !== "badge"
+        }
+
+        Text {
+            anchors.verticalCenter: parent.verticalCenter
+            text: root.linkQuality === "down"
+                  ? "offline"
+                  : (root.latencyMs !== null && root.latencyMs !== undefined
+                     ? root.latencyMs + "ms" : "")
+            color: root.dotColor === "transparent" ? root.subtleColor : root.dotColor
+            font.family: Theme.fontMono
+            font.pixelSize: Theme.typeCaption
+            font.weight: Theme.typeCaptionWeight
+            font.features: ({ "tnum": 1 })
+            visible: root.prominence === "expanded" && root.linkQuality !== ""
         }
     }
 }

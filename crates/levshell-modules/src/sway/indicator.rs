@@ -29,6 +29,11 @@ pub struct WorkspaceIndicatorState {
     pub workspaces: Vec<WorkspaceInfo>,
     pub active: Option<String>,
     pub focused_window: Option<String>,
+    /// Project owning the active workspace, resolved from the project
+    /// registry's `workspace_names` (spec §2.1.3). `None` when the
+    /// workspace isn't claimed by any project — the breadcrumb then
+    /// collapses to `workspace › window`.
+    pub project: Option<String>,
 }
 
 impl WorkspaceIndicatorState {
@@ -42,11 +47,17 @@ impl WorkspaceIndicatorState {
             workspaces,
             active,
             focused_window: None,
+            project: None,
         }
     }
 
     pub fn with_focused_window(mut self, title: Option<String>) -> Self {
         self.focused_window = title;
+        self
+    }
+
+    pub fn with_project(mut self, project: Option<String>) -> Self {
+        self.project = project;
         self
     }
 
@@ -109,6 +120,25 @@ mod tests {
         let state = WorkspaceIndicatorState::from_workspaces([ws("a", 1, true)])
             .with_focused_window(Some("Alacritty".into()));
         assert_eq!(state.focused_window.as_deref(), Some("Alacritty"));
+    }
+
+    #[test]
+    fn with_project_sets_breadcrumb_segment() {
+        let state = WorkspaceIndicatorState::from_workspaces([ws("research", 1, true)])
+            .with_focused_window(Some("nvim".into()))
+            .with_project(Some("Sparse Attention".into()));
+        assert_eq!(state.project.as_deref(), Some("Sparse Attention"));
+        let update = state.into_widget_update(WidgetStatus::Normal);
+        assert_eq!(
+            update.state.get("project").and_then(|v| v.as_str()),
+            Some("Sparse Attention")
+        );
+    }
+
+    #[test]
+    fn project_defaults_to_none() {
+        let state = WorkspaceIndicatorState::from_workspaces([ws("a", 1, true)]);
+        assert!(state.project.is_none());
     }
 
     #[test]

@@ -5,7 +5,8 @@
 //     "percent": 28,
 //     "status": "discharging",   // charging|discharging|full|not_charging|unknown
 //     "on_battery": true,
-//     "time_remaining_seconds": 3876
+//     "time_remaining_seconds": 3876,
+//     "power_watts": 12.3            // instantaneous draw/charge, or null
 //   }
 
 import QtQuick
@@ -21,6 +22,7 @@ WidgetWrapper {
     readonly property int timeRemaining: (widgetState && widgetState.time_remaining_seconds) || 0
     readonly property bool charging: batteryStatus === "charging"
     readonly property bool full: batteryStatus === "full"
+    readonly property var powerWatts: widgetState ? widgetState.power_watts : null
 
     readonly property color batteryColor: {
         if (root.escalated) return root.contentColor;
@@ -87,6 +89,19 @@ WidgetWrapper {
             font.features: ({ "tnum": 1 })
             visible: (root.prominence === "visible" || root.prominence === "expanded")
                      && root.formattedTime.length > 0
+        }
+
+        Text {
+            anchors.verticalCenter: parent.verticalCenter
+            text: (root.powerWatts !== null && root.powerWatts !== undefined)
+                  ? root.powerWatts.toFixed(1) + "W" : ""
+            color: root.subtleColor
+            font.family: Theme.fontMono
+            font.pixelSize: Theme.typeCaption
+            font.weight: Theme.typeCaptionWeight
+            font.features: ({ "tnum": 1 })
+            visible: root.prominence === "expanded"
+                     && root.powerWatts !== null && root.powerWatts !== undefined
         }
     }
 }

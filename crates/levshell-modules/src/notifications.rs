@@ -101,11 +101,19 @@ impl NotificationSender for NotifyRustSender {
 pub struct NotificationsModule {
     publisher: WidgetPublisher,
     sender: Arc<dyn NotificationSender>,
+    /// Presentation mode (spec §2.18): when set, ideation nudges and
+    /// low/normal ctl notifications are dropped. Critical escalations
+    /// always pass — that's the whole point of the escape hatch.
+    presentation: bool,
 }
 
 impl NotificationsModule {
     pub fn new(publisher: WidgetPublisher, sender: Arc<dyn NotificationSender>) -> Self {
-        Self { publisher, sender }
+        Self {
+            publisher,
+            sender,
+            presentation: false,
+        }
     }
 
     /// Production constructor — wires in [`NotifyRustSender`].
@@ -125,6 +133,7 @@ impl Module for NotificationsModule {
             EventKind::CriticalEscalation,
             EventKind::NudgeDelivered,
             EventKind::NotifyRequested,
+            EventKind::PresentationModeChanged,
         ]
     }
 
@@ -173,6 +182,13 @@ impl Module for NotificationsModule {
             // transient toast even when another daemon owns
             // org.freedesktop.Notifications (spec §2.9.2).
             Event::NudgeDelivered { kind, title, .. } => {
+                if self.presentation {
+                    tracing::debug!(
+                        kind = %kind,
+                        "notifications: nudge suppressed (presentation mode)"
+                    );
+                    return Ok(());
+                }
                 if let Err(e) = self.publisher.try_send(DaemonMessage::Nudge(Nudge {
                     kind: kind.clone(),
                     title: title.clone(),
@@ -211,6 +227,13 @@ impl Module for NotificationsModule {
                 body,
                 urgency,
             } => {
+                if self.presentation && urgency != "critical" {
+                    tracing::debug!(
+                        urgency = %urgency,
+                        "notifications: ctl notify suppressed (presentation mode)"
+                    );
+                    return Ok(());
+                }
                 let sender = Arc::clone(&self.sender);
                 let (u, t, b) = (urgency.clone(), title.clone(), body.clone());
                 let res = tokio::task::spawn_blocking(move || {
@@ -228,6 +251,14 @@ impl Module for NotificationsModule {
                     ),
                     Ok(Ok(())) => {}
                 }
+            }
+            // Presentation mode (spec §2.18) flips the gate for nudges
+            // and non-critical ctl notifications above. Critical
+            // escalations are unaffected — they bypass this flag
+            // entirely.
+            Event::PresentationModeChanged { on } => {
+                self.presentation = *on;
+                tracing::info!(on = *on, "notifications: presentation mode");
             }
             _ => {}
         }
@@ -439,10 +470,11 @@ mod tests {
         let task = spawn_writer_task(w, 4);
         let m = NotificationsModule::new(task.publisher, spy);
         let subs = m.subscribed_events();
-        assert_eq!(subs.len(), 3);
+        assert_eq!(subs.len(), 4);
         assert!(subs.contains(&EventKind::CriticalEscalation));
         assert!(subs.contains(&EventKind::NudgeDelivered));
         assert!(subs.contains(&EventKind::NotifyRequested));
+        assert!(subs.contains(&EventKind::PresentationModeChanged));
     }
 
     #[tokio::test]
@@ -480,5 +512,71 @@ mod tests {
             }
             other => panic!("unexpected DaemonMessage: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn presentation_mode_suppresses_nudge_but_not_critical() {
+        let spy = Arc::new(SpySender::with_result(Ok(())));
+        let (mut module, _fwd) = module_with_spy(spy.clone()).await;
+
+        module
+            .on_event(&Event::PresentationModeChanged { on: true })
+            .await
+            .unwrap();
+
+        // Nudge: dropped — no sender call.
+        module
+            .on_event(&Event::NudgeDelivered {
+                project_id: uuid::Uuid::nil(),
+                kind: "open_question".into(),
+                title: "later".into(),
+            })
+            .await
+            .unwrap();
+        assert!(
+            spy.nudges().is_empty(),
+            "nudge must be muted in presentation mode"
+        );
+
+        // Non-critical ctl notify: dropped.
+        module
+            .on_event(&Event::NotifyRequested {
+                title: "build done".into(),
+                body: "ok".into(),
+                urgency: "normal".into(),
+            })
+            .await
+            .unwrap();
+        assert!(spy.notifies().is_empty(), "normal notify must be muted");
+
+        // Critical escalation: still passes — the whole point of §2.18.
+        module
+            .on_event(&Event::CriticalEscalation {
+                widget_id: "battery".into(),
+                title: "Battery critically low".into(),
+                body: "3%".into(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(spy.calls().len(), 1, "critical must still fire");
+
+        // Leaving presentation mode re-enables nudges.
+        module
+            .on_event(&Event::PresentationModeChanged { on: false })
+            .await
+            .unwrap();
+        module
+            .on_event(&Event::NudgeDelivered {
+                project_id: uuid::Uuid::nil(),
+                kind: "open_question".into(),
+                title: "now".into(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            spy.nudges().len(),
+            1,
+            "nudges resume after presentation off"
+        );
     }
 }

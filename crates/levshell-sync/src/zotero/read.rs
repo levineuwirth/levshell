@@ -196,11 +196,10 @@ pub(crate) fn read_items(conn: &Connection) -> Result<Vec<RawItem>, ZoteroError>
                 // three common ones into publication_title, first
                 // non-empty wins. publicationTitle (journal articles)
                 // is most common so we let it overwrite only if empty.
-                "publicationTitle" | "conferenceName" | "proceedingsTitle" | "bookTitle" => {
-                    if item.publication_title.is_none() {
+                "publicationTitle" | "conferenceName" | "proceedingsTitle" | "bookTitle"
+                    if item.publication_title.is_none() => {
                         item.publication_title = Some(value);
                     }
-                }
                 "abstractNote" => item.abstract_note = Some(value),
                 "extra" => item.extra = Some(value),
                 _ => {}

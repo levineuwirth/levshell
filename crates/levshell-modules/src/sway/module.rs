@@ -20,6 +20,7 @@ use levshell_core::{
     Event, EventBus, EventKind, Module, ModuleError, ModuleResult, WidgetDescriptor,
 };
 use levshell_ipc::{DaemonMessage, WidgetPublisher, WidgetStatus};
+use levshell_projects::ProjectRegistry;
 use swayipc_async::{
     Connection, Event as SwayEvent, EventType, Workspace, WorkspaceChange, WindowChange,
 };
@@ -32,17 +33,40 @@ use super::indicator::{
 pub struct SwayWorkspaceModule {
     bus: EventBus,
     publisher: WidgetPublisher,
+    /// Used to resolve the active workspace → owning project for the
+    /// breadcrumb (spec §2.1.3). `None` (no projects configured) just
+    /// means the breadcrumb omits the project segment.
+    projects: Option<ProjectRegistry>,
     task: Option<JoinHandle<()>>,
 }
 
 impl SwayWorkspaceModule {
-    pub fn new(bus: EventBus, publisher: WidgetPublisher) -> Self {
+    pub fn new(
+        bus: EventBus,
+        publisher: WidgetPublisher,
+        projects: Option<ProjectRegistry>,
+    ) -> Self {
         Self {
             bus,
             publisher,
+            projects,
             task: None,
         }
     }
+}
+
+/// Resolve the project name owning the focused workspace, if any.
+/// Pulled out so both the initial publish and the event loop share it.
+async fn resolve_project(
+    projects: Option<&ProjectRegistry>,
+    workspaces: &[WorkspaceInfo],
+) -> Option<String> {
+    let registry = projects?;
+    let active = workspaces.iter().find(|w| w.focused)?;
+    registry
+        .find_by_workspace(&active.name)
+        .await
+        .map(|e| e.project.name)
 }
 
 fn convert(workspaces: Vec<Workspace>) -> Vec<WorkspaceInfo> {
@@ -62,9 +86,11 @@ fn publish_indicator(
     publisher: &WidgetPublisher,
     workspaces: Vec<WorkspaceInfo>,
     focused_window: Option<String>,
+    project: Option<String>,
 ) {
     let state = WorkspaceIndicatorState::from_workspaces(workspaces)
-        .with_focused_window(focused_window);
+        .with_focused_window(focused_window)
+        .with_project(project);
     let msg = DaemonMessage::WidgetUpdate(state.into_widget_update(WidgetStatus::Normal));
     if let Err(e) = publisher.try_send(msg) {
         tracing::warn!(error = %e, "sway-workspace: failed to push WidgetUpdate (channel full or closed)");
@@ -110,7 +136,9 @@ impl Module for SwayWorkspaceModule {
             .get_workspaces()
             .await
             .map_err(|e| ModuleError::Failed(format!("get_workspaces: {e}")))?;
-        publish_indicator(&self.publisher, convert(initial), None);
+        let initial = convert(initial);
+        let project = resolve_project(self.projects.as_ref(), &initial).await;
+        publish_indicator(&self.publisher, initial, None, project);
 
         let events = sub_conn
             .subscribe([EventType::Workspace, EventType::Window])
@@ -119,9 +147,10 @@ impl Module for SwayWorkspaceModule {
 
         let bus = self.bus.clone();
         let publisher = self.publisher.clone();
+        let projects = self.projects.clone();
 
         let task = tokio::spawn(async move {
-            run_event_loop(events, query_conn, bus, publisher).await;
+            run_event_loop(events, query_conn, bus, publisher, projects).await;
         });
         self.task = Some(task);
 
@@ -145,6 +174,7 @@ async fn run_event_loop(
     mut query_conn: Connection,
     bus: EventBus,
     publisher: WidgetPublisher,
+    projects: Option<ProjectRegistry>,
 ) {
     tokio::pin!(events);
 
@@ -184,10 +214,14 @@ async fn run_event_loop(
 
                     match query_conn.get_workspaces().await {
                         Ok(workspaces) => {
+                            let ws = convert(workspaces);
+                            let project =
+                                resolve_project(projects.as_ref(), &ws).await;
                             publish_indicator(
                                 &publisher,
-                                convert(workspaces),
+                                ws,
                                 current_focused_window.clone(),
+                                project,
                             );
                         }
                         Err(e) => {
@@ -206,10 +240,13 @@ async fn run_event_loop(
                         title: title.clone().unwrap_or_default(),
                     });
                     if let Ok(workspaces) = query_conn.get_workspaces().await {
+                        let ws = convert(workspaces);
+                        let project = resolve_project(projects.as_ref(), &ws).await;
                         publish_indicator(
                             &publisher,
-                            convert(workspaces),
+                            ws,
                             current_focused_window.clone(),
+                            project,
                         );
                     }
                 }

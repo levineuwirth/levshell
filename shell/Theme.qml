@@ -286,6 +286,11 @@ QtObject {
     readonly property string iconWarning:         "\uE4E0"  // ph-warning
     readonly property string iconMemory:          "\uE9C4"  // ph-memory
     readonly property string iconCpu:             "\uE610"  // ph-cpu
+    readonly property string iconHardDrive:       "\uE796"  // ph-hard-drive (disk)
+    // Power profiles (spec \u00A72.3.2) \u2014 power-saver / balanced / performance.
+    readonly property string iconLeaf:            "\uE2E0"  // ph-leaf (power-saver)
+    readonly property string iconGauge:           "\uE27A"  // ph-gauge (balanced)
+    readonly property string iconLightning:       "\uE2EC"  // ph-lightning (performance)
     readonly property string iconBell:            "\uE0CE"  // ph-bell (notifications)
     readonly property string iconAppWindow:       "\uE5DA"  // ph-app-window (app hint)
     readonly property string iconSquaresFour:     "\uE464"  // ph-squares-four (workspace hint)

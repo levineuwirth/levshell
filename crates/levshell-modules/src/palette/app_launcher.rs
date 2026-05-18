@@ -81,26 +81,22 @@ impl DesktopEntry {
             let key = key.trim();
             let value = value.trim();
             match key {
-                "Name" => {
-                    if name.is_none() {
+                "Name"
+                    if name.is_none() => {
                         name = Some(value.to_owned());
                     }
-                }
-                "Exec" => {
-                    if exec.is_none() {
+                "Exec"
+                    if exec.is_none() => {
                         exec = Some(value.to_owned());
                     }
-                }
-                "Comment" => {
-                    if comment.is_none() {
+                "Comment"
+                    if comment.is_none() => {
                         comment = Some(value.to_owned());
                     }
-                }
-                "Icon" => {
-                    if icon_name.is_none() && !value.is_empty() {
+                "Icon"
+                    if icon_name.is_none() && !value.is_empty() => {
                         icon_name = Some(value.to_owned());
                     }
-                }
                 "NoDisplay" => {
                     no_display = value.eq_ignore_ascii_case("true");
                 }

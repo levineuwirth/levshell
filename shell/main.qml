@@ -153,12 +153,19 @@ Scope {
     property bool duckStreaming: false
     property var duckMessages: []
 
+    // Presentation mode (spec §2.18): mute non-critical surfaces for
+    // talks / screen-sharing. Driven by the daemon's theme service.
+    property bool presentationMode: false
+
     // Ideation nudge toast (§2.9.2). Single-slot — nudges are Poisson-
     // spaced (λ≈45min) so the latest simply replaces any showing one.
     // Auto-dismisses; click dismisses early.
     property var currentNudge: ({ kind: "", title: "" })
     property bool nudgeVisible: false
     function showNudge(msg) {
+        // The daemon already drops nudges in presentation mode; guard
+        // here too in case one was in flight when the mode flipped.
+        if (shell.presentationMode) return;
         shell.currentNudge = { kind: msg.kind || "", title: msg.title || "" };
         shell.nudgeVisible = true;
         nudgeDismissTimer.restart();
@@ -258,6 +265,12 @@ Scope {
             action: "toggle", data: {}
         });
     }
+    function sendPowerProfileCycle() {
+        shell.sendShellMessage({
+            type: "widget_action", widget_id: "power-profile",
+            action: "cycle", data: {}
+        });
+    }
     function sendLatexOpenLog() {
         shell.sendShellMessage({
             type: "widget_action", widget_id: "latex-status",
@@ -308,6 +321,8 @@ Scope {
         "memory": memoryComponent,
         "battery": batteryComponent,
         "network": networkComponent,
+        "disk": diskComponent,
+        "power-profile": powerProfileComponent,
         "notifications": notificationsComponent,
         "control-center": controlCenterComponent,
         "system-tray": systemTrayComponent,
@@ -329,6 +344,8 @@ Scope {
     Component { id: memoryComponent; MemoryWidget {} }
     Component { id: batteryComponent; BatteryWidget {} }
     Component { id: networkComponent; NetworkWidget {} }
+    Component { id: diskComponent; DiskWidget {} }
+    Component { id: powerProfileComponent; PowerProfileWidget {} }
     Component { id: notificationsComponent; NotificationsWidget {} }
     Component { id: controlCenterComponent; ControlCenterWidget {} }
     Component { id: systemTrayComponent; SystemTrayWidget {} }
@@ -402,6 +419,8 @@ Scope {
             break;
         }
         case "warmup": {
+            // Non-critical surface — suppressed during a talk.
+            if (shell.presentationMode) break;
             shell.warmupPayload = {
                 fired_at: msg.fired_at || "",
                 events: msg.events || [],
@@ -426,6 +445,7 @@ Scope {
             break;
         }
         case "duck_open": {
+            if (shell.presentationMode) break;
             shell.duckOpen = true;
             break;
         }
@@ -444,6 +464,16 @@ Scope {
         }
         case "nudge": {
             shell.showNudge(msg);
+            break;
+        }
+        case "presentation_mode": {
+            shell.presentationMode = !!msg.on;
+            // Entering presentation mode tears down any non-critical
+            // surface that's currently up.
+            if (shell.presentationMode) {
+                shell.warmupOpen = false;
+                shell.duckOpen = false;
+            }
             break;
         }
         case "critical_escalation": {

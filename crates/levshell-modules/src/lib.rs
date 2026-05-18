@@ -93,8 +93,10 @@ pub use sway::{
     WORKSPACE_WIDGET_TYPE,
 };
 pub use telemetry::{
-    BatteryModule, BatteryState, BatteryStatus, CpuModule, CpuSample, CpuState, IfaceRate,
-    MemoryModule, MemoryState, NetworkModule, NetworkState, UPowerWatcherModule,
-    BATTERY_WIDGET_ID, BATTERY_WIDGET_TYPE, CPU_WIDGET_ID, CPU_WIDGET_TYPE, MEMORY_WIDGET_ID,
-    MEMORY_WIDGET_TYPE, NETWORK_WIDGET_ID, NETWORK_WIDGET_TYPE,
+    BatteryModule, BatteryState, BatteryStatus, CpuModule, CpuSample, CpuState, DiskConfig,
+    DiskModule, DiskState, IfaceRate, LinkQuality, MemoryModule, MemoryState, MountUsage,
+    NetworkConfig, NetworkModule, NetworkState, PowerProfilesModule, PowerProfileState,
+    UPowerWatcherModule, BATTERY_WIDGET_ID, BATTERY_WIDGET_TYPE, CPU_WIDGET_ID, CPU_WIDGET_TYPE,
+    DISK_WIDGET_ID, DISK_WIDGET_TYPE, MEMORY_WIDGET_ID, MEMORY_WIDGET_TYPE, NETWORK_WIDGET_ID,
+    NETWORK_WIDGET_TYPE, POWER_PROFILE_WIDGET_ID, POWER_PROFILE_WIDGET_TYPE,
 };

@@ -910,6 +910,12 @@ fn dispatch_theme(
         ThemeAction::List => CtlResponse::Themes {
             names: state.theme.list(),
         },
+        ThemeAction::Presentation => {
+            let on = state.theme.set_presentation(name.as_deref());
+            CtlResponse::ContextSnapshotResult {
+                summary: format!("presentation mode {}", if on { "on" } else { "off" }),
+            }
+        }
     }
 }
 

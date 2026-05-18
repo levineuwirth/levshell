@@ -14,6 +14,7 @@
 //! | [`MemoryModule`] | `/proc/meminfo`       |  2s   | `memory`  |
 //! | [`BatteryModule`]| `/sys/class/power_supply` | 10s | `battery` |
 //! | [`NetworkModule`]| `/proc/net/dev`, `/proc/net/wireless` | 5s | `network` |
+//! | [`DiskModule`]   | `statvfs(2)` per mount |  60s | `disk`    |
 //!
 //! ## Design notes
 //!
@@ -37,16 +38,26 @@
 
 pub mod battery;
 pub mod cpu;
+pub mod disk;
 pub mod memory;
 pub mod network;
+pub mod power_profiles;
 pub mod upower;
 
 pub use battery::{
     BatteryModule, BatteryState, BatteryStatus, BATTERY_WIDGET_ID, BATTERY_WIDGET_TYPE,
 };
+pub use disk::{
+    DiskConfig, DiskModule, DiskState, MountUsage, DISK_WIDGET_ID, DISK_WIDGET_TYPE,
+};
 pub use cpu::{CpuModule, CpuSample, CpuState, CPU_WIDGET_ID, CPU_WIDGET_TYPE};
 pub use memory::{MemoryModule, MemoryState, MEMORY_WIDGET_ID, MEMORY_WIDGET_TYPE};
 pub use network::{
-    IfaceCounters, IfaceRate, NetworkModule, NetworkState, NETWORK_WIDGET_ID, NETWORK_WIDGET_TYPE,
+    classify_latency, IfaceCounters, IfaceRate, LinkQuality, NetworkConfig, NetworkModule,
+    NetworkState, NETWORK_WIDGET_ID, NETWORK_WIDGET_TYPE,
+};
+pub use power_profiles::{
+    next_profile, order_profiles, PowerProfileState, PowerProfilesModule,
+    POWER_PROFILE_WIDGET_ID, POWER_PROFILE_WIDGET_TYPE,
 };
 pub use upower::UPowerWatcherModule;
