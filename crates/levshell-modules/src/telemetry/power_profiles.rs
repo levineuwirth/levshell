@@ -42,6 +42,12 @@ const PROFILES_PROP: &str = "Profiles";
 /// battery, and other clients (GNOME) can set it. 20 s keeps the bar
 /// honest without busying the bus.
 const TICK_INTERVAL: Duration = Duration::from_secs(20);
+/// Upper bound for the one-shot D-Bus probe in `start()`. zbus has no
+/// built-in call timeout and the runner does not protect `start()`, so
+/// this is the only thing standing between a stalled PPD activation and
+/// a daemon that never finishes module registration. Generous (a local
+/// system-bus round-trip is sub-ms) but finite.
+const START_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PowerProfileState {
@@ -181,12 +187,34 @@ impl Module for PowerProfilesModule {
     }
 
     async fn start(&mut self) -> ModuleResult<()> {
-        let conn = zbus::Connection::system().await.map_err(|e| {
-            ModuleError::Unavailable(format!("no system bus for power-profiles-daemon: {e}"))
-        })?;
-        let state = Self::read_state(&conn).await.map_err(|e| {
-            ModuleError::Unavailable(format!("power-profiles-daemon unreachable: {e}"))
-        })?;
+        // The module runner timeout-wraps tick()/on_event() but NOT
+        // start() (runner.rs). zbus has no built-in method-call timeout,
+        // so an activatable-but-stalled power-profiles-daemon (or a
+        // wedged system bus) would hang here forever — and because
+        // modules register sequentially, that stalls the whole daemon's
+        // registration and the bar comes up empty. Bound it ourselves so
+        // the documented fail-soft ("the module parks") holds on the
+        // hang path too, not just the fast-error path.
+        let connect = async {
+            let conn = zbus::Connection::system().await.map_err(|e| {
+                ModuleError::Unavailable(format!(
+                    "no system bus for power-profiles-daemon: {e}"
+                ))
+            })?;
+            let state = Self::read_state(&conn).await.map_err(|e| {
+                ModuleError::Unavailable(format!(
+                    "power-profiles-daemon unreachable: {e}"
+                ))
+            })?;
+            Ok::<_, ModuleError>((conn, state))
+        };
+        let (conn, state) = tokio::time::timeout(START_TIMEOUT, connect)
+            .await
+            .map_err(|_| {
+                ModuleError::Unavailable(
+                    "power-profiles-daemon: D-Bus probe timed out".into(),
+                )
+            })??;
         self.conn = Some(conn);
         self.publish(&state);
         Ok(())
@@ -224,6 +252,23 @@ impl Module for PowerProfilesModule {
         };
 
         if let Some(profile) = target {
+            // Only forward a profile PPD actually advertised. `cycle`
+            // already derives from `available`; `set` carries verbatim
+            // widget-action JSON, so without this an arbitrary string
+            // would flow into the privileged `set_property` call. PPD
+            // would reject it anyway, but unvalidated external input
+            // shouldn't reach a privileged D-Bus write.
+            let allowed = self
+                .last
+                .as_ref()
+                .is_some_and(|s| s.available.iter().any(|p| p == &profile));
+            if !allowed {
+                tracing::warn!(
+                    profile = %profile,
+                    "power-profiles: ignoring set to a profile not in PPD's advertised set"
+                );
+                return Ok(());
+            }
             match Self::set_profile(&conn, &profile).await {
                 Ok(()) => {
                     tracing::info!(profile = %profile, "power-profiles: switched");
