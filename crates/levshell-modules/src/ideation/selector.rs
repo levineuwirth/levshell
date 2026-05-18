@@ -16,10 +16,21 @@
 //! 3. Otherwise, fall through to the remaining kinds in descending
 //!    weight order until one produces a candidate or we exhaust them.
 //!
-//! Cross-connection is only valid when a recently-synced entity's
-//! tags overlap with a project *other than* the entity's current
-//! owner — otherwise we're nudging the user about a link they've
-//! already drawn.
+//! Cross-connection has two bases, tried in confidence order:
+//!
+//! 1. **Graph-mined** (preferred): the entity has a relation-graph
+//!    edge (`wiki_link`, `scaffolded_from`, …) to a neighbour that
+//!    lives in a *different* active project. The user has literally
+//!    drawn this link across a project boundary — a latent
+//!    cross-pollination they may not have noticed at the project
+//!    level. High confidence: it's a real edge, not a guess.
+//! 2. **Tag-overlap** (fallback): a recently-synced entity's tags
+//!    overlap with a project *other than* the entity's owner. A
+//!    weaker thematic hint, used only when no graph edge connects the
+//!    entity across projects (sparse graphs / new libraries).
+//!
+//! Either way the nudge targets the *other* project so we never nudge
+//! about a link the user has already surfaced there.
 
 use chrono::{DateTime, Utc};
 use levshell_data::{EntityType, ProjectStatus};
@@ -55,6 +66,29 @@ pub struct RecentEntity {
     pub project_id: Option<Uuid>,
     pub tags: Vec<String>,
     pub updated_at: DateTime<Utc>,
+    /// Relation-graph neighbours of this entity, each carrying the
+    /// neighbour's owning project (if any). Populated by the module
+    /// from `DataStore::related_entities`; the graph-mined
+    /// cross-connection pass looks for a neighbour in a *different*
+    /// project. Empty when the entity has no edges (the common case
+    /// for a fresh library) — the selector then falls back to tags.
+    pub graph_links: Vec<GraphLink>,
+}
+
+/// One relation-graph edge from a [`RecentEntity`] to a neighbour,
+/// pre-resolved by the module so the selector stays pure (no async,
+/// no store).
+#[derive(Debug, Clone)]
+pub struct GraphLink {
+    /// `entity_relations.relation_kind` verbatim (`wiki_link`,
+    /// `scaffolded_from`, …) — used in the nudge body so the user
+    /// knows *how* the two are connected.
+    pub kind: String,
+    /// Human label for the neighbour (note/ref title, `@citekey …`).
+    pub neighbour_label: String,
+    /// The neighbour's owning project, if it belongs to one. `None`
+    /// neighbours can't be a *cross*-project signal and are skipped.
+    pub neighbour_project: Option<Uuid>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -139,28 +173,79 @@ fn pick_open_question<R: Rng>(ctx: &NudgeContext<'_>, rng: &mut R) -> Option<Nud
     })
 }
 
+fn entity_label(ty: EntityType) -> &'static str {
+    match ty {
+        EntityType::Reference => "reference",
+        _ => "note",
+    }
+}
+
 fn pick_cross_connection<R: Rng>(ctx: &NudgeContext<'_>, rng: &mut R) -> Option<Nudge> {
     // Only consider entities inside the configured recency window.
+    // (No tag requirement here — the graph-mined pass doesn't need
+    // tags; the tag pass filters per-entity below.)
     let horizon = ctx.now
         - chrono::Duration::hours(ctx.config.recent_seed_hours.max(1) as i64);
     let fresh: Vec<&RecentEntity> = ctx
         .recent_entities
         .iter()
-        .filter(|e| e.updated_at >= horizon && !e.tags.is_empty())
+        .filter(|e| e.updated_at >= horizon)
         .collect();
     if fresh.is_empty() {
         return None;
     }
 
-    // Shuffle so ties don't always pick the first entity.
+    // Shuffle so ties don't always pick the first entity. One shuffle
+    // shared by both passes; an empty `choose` consumes no RNG, so the
+    // graph pass not firing leaves the tag pass's draw order unchanged.
     let mut shuffled = fresh;
     shuffled.shuffle(rng);
+    let eligible = eligible_projects(ctx);
 
-    for entity in shuffled {
+    // Pass 1 — graph-mined (high confidence). A real relation-graph
+    // edge whose neighbour lives in a *different* active project: the
+    // user has already drawn this link across a project boundary.
+    for entity in &shuffled {
+        let candidates: Vec<(&ProjectEntry, &GraphLink)> = entity
+            .graph_links
+            .iter()
+            .filter_map(|link| {
+                let np = link.neighbour_project?;
+                // Same project as the entity → not a *cross* link.
+                if Some(np) == entity.project_id {
+                    return None;
+                }
+                let project = eligible.iter().find(|p| p.project.id == np)?;
+                Some((*project, link))
+            })
+            .collect();
+
+        if let Some((project, link)) = candidates.choose(rng) {
+            return Some(Nudge {
+                project_id: project.project.id,
+                kind: NudgeKind::CrossConnection,
+                title: project.project.name.clone(),
+                body: format!(
+                    "Recent {} \"{}\" is linked ({}) to \"{}\" in this project — surface the connection?",
+                    entity_label(entity.entity_type),
+                    entity.title,
+                    link.kind,
+                    link.neighbour_label
+                ),
+            });
+        }
+    }
+
+    // Pass 2 — tag-overlap fallback. A thematic hint when no edge
+    // crosses a project boundary yet.
+    for entity in &shuffled {
+        if entity.tags.is_empty() {
+            continue;
+        }
         // Projects the entity does NOT already belong to, with at
         // least one overlapping tag.
-        let overlaps: Vec<(&ProjectEntry, Vec<String>)> = eligible_projects(ctx)
-            .into_iter()
+        let overlaps: Vec<(&ProjectEntry, Vec<String>)> = eligible
+            .iter()
             .filter(|p| entity.project_id != Some(p.project.id))
             .filter_map(|p| {
                 let common: Vec<String> = p
@@ -173,22 +258,19 @@ fn pick_cross_connection<R: Rng>(ctx: &NudgeContext<'_>, rng: &mut R) -> Option<
                 if common.is_empty() {
                     None
                 } else {
-                    Some((p, common))
+                    Some((*p, common))
                 }
             })
             .collect();
 
         if let Some((project, common)) = overlaps.choose(rng) {
-            let entity_label = match entity.entity_type {
-                EntityType::Reference => "reference",
-                _ => "note",
-            };
             return Some(Nudge {
                 project_id: project.project.id,
                 kind: NudgeKind::CrossConnection,
                 title: project.project.name.clone(),
                 body: format!(
-                    "Recent {entity_label} \"{}\" shares tags [{}] with this project.",
+                    "Recent {} \"{}\" shares tags [{}] with this project.",
+                    entity_label(entity.entity_type),
                     entity.title,
                     common.join(", ")
                 ),
@@ -472,6 +554,7 @@ mod tests {
             project_id: Some(project_a), // already owned by A
             tags: vec!["shell".into(), "qml".into()],
             updated_at: fixed_now(),
+            graph_links: vec![],
         }];
         let ctx = NudgeContext {
             projects: &projects,
@@ -494,6 +577,119 @@ mod tests {
             "must pick a project other than the one the entity already belongs to"
         );
         assert!(nudge.body.contains("shell"));
+    }
+
+    #[test]
+    fn graph_mined_link_beats_tag_overlap_and_names_the_edge() {
+        let project_a = Uuid::now_v7();
+        let project_b = Uuid::now_v7();
+        let note_id = Uuid::now_v7();
+        let projects = vec![
+            entry(
+                project_a,
+                "Reading",
+                ProjectStatus::Active,
+                vec![],
+                vec![], // no tags: the only basis is the graph edge
+                fixed_now(),
+            ),
+            entry(
+                project_b,
+                "Thesis",
+                ProjectStatus::Active,
+                vec![],
+                vec![],
+                fixed_now(),
+            ),
+        ];
+        let recent = vec![RecentEntity {
+            id: note_id,
+            entity_type: EntityType::Note,
+            title: "Sparse attention scratch".into(),
+            project_id: Some(project_a), // note lives in A …
+            tags: vec![],
+            updated_at: fixed_now(),
+            // … but it wiki-links a note that lives in B.
+            graph_links: vec![GraphLink {
+                kind: "wiki_link".into(),
+                neighbour_label: "Longformer summary".into(),
+                neighbour_project: Some(project_b),
+            }],
+        }];
+        let ctx = NudgeContext {
+            projects: &projects,
+            recent_entities: &recent,
+            now: fixed_now(),
+            config: &IdeationConfig {
+                weights: crate::ideation::config::NudgeWeights {
+                    open_question: 0.0,
+                    cross_connection: 1.0,
+                    blocked: 0.0,
+                },
+                ..base_config()
+            },
+        };
+        let mut rng = StdRng::seed_from_u64(23);
+        let nudge = NudgeSelector::new().select(&ctx, &mut rng).unwrap();
+        assert_eq!(nudge.kind, NudgeKind::CrossConnection);
+        assert_eq!(
+            nudge.project_id, project_b,
+            "nudge targets the neighbour's project, not the entity's own"
+        );
+        assert!(
+            nudge.body.contains("wiki_link"),
+            "body names how they're connected: {}",
+            nudge.body
+        );
+        assert!(
+            nudge.body.contains("Longformer summary"),
+            "body names the linked neighbour: {}",
+            nudge.body
+        );
+    }
+
+    #[test]
+    fn graph_link_within_same_project_is_not_cross_connection() {
+        // A note links to another note in its *own* project — already
+        // surfaced there, so no cross-connection. With no tags and no
+        // other basis, the selector emits nothing.
+        let project_a = Uuid::now_v7();
+        let projects = vec![entry(
+            project_a,
+            "Solo",
+            ProjectStatus::Active,
+            vec![],
+            vec![],
+            fixed_now(),
+        )];
+        let recent = vec![RecentEntity {
+            id: Uuid::now_v7(),
+            entity_type: EntityType::Note,
+            title: "Intra-project note".into(),
+            project_id: Some(project_a),
+            tags: vec![],
+            updated_at: fixed_now(),
+            graph_links: vec![GraphLink {
+                kind: "wiki_link".into(),
+                neighbour_label: "Sibling note".into(),
+                neighbour_project: Some(project_a),
+            }],
+        }];
+        let ctx = NudgeContext {
+            projects: &projects,
+            recent_entities: &recent,
+            now: fixed_now(),
+            config: &IdeationConfig {
+                weights: crate::ideation::config::NudgeWeights {
+                    open_question: 0.0,
+                    cross_connection: 1.0,
+                    blocked: 0.0,
+                },
+                ..base_config()
+            },
+        };
+        let mut rng = StdRng::seed_from_u64(29);
+        assert_eq!(NudgeSelector::new().select(&ctx, &mut rng), None);
     }
 
     #[test]

@@ -33,10 +33,11 @@ use levshell_projects::ProjectRegistry;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use tokio::sync::Mutex;
+use uuid::Uuid;
 
 pub use config::{IdeationConfig, IdeationConfigError, NudgeWeights};
 pub use nudge::{Nudge, NudgeKind};
-pub use selector::{NudgeContext, NudgeSelector, RecentEntity};
+pub use selector::{GraphLink, NudgeContext, NudgeSelector, RecentEntity};
 
 pub const MODULE_NAME: &str = "ideation";
 
@@ -167,11 +168,66 @@ impl IdeationModule {
         Ok(())
     }
 
+    /// The neighbour's owning project, resolved per relation-graph
+    /// edge so the selector (which stays pure) can spot a link that
+    /// crosses a project boundary. Only Notes/References carry a
+    /// project today, and only Note↔Note / Note↔Ref edges exist, so
+    /// every other type is `None` rather than an extra query.
+    async fn neighbour_project(&self, ty: EntityType, id: Uuid) -> Option<Uuid> {
+        match ty {
+            EntityType::Note => self
+                .store
+                .get_note(id)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|n| n.project_id),
+            EntityType::Reference => self
+                .store
+                .get_reference(id)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|r| r.project_id),
+            _ => None,
+        }
+    }
+
+    /// Relation-graph edges of `(id, ty)`, each pre-resolved to a
+    /// [`GraphLink`] (edge kind + neighbour label + neighbour's
+    /// project). A graph read failure is logged at DEBUG and yields no
+    /// links — the selector then just falls back to the tag heuristic,
+    /// never wedging a tick.
+    async fn graph_links_for(&self, id: Uuid, ty: EntityType) -> Vec<GraphLink> {
+        let related = match self.store.related_entities(id, ty).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::debug!(
+                    module = MODULE_NAME,
+                    error = %e,
+                    "related_entities failed; cross-connection falls back to tags"
+                );
+                return Vec::new();
+            }
+        };
+        let mut links = Vec::with_capacity(related.len());
+        for r in related {
+            let neighbour_project = self.neighbour_project(r.entity_type, r.entity_id).await;
+            links.push(GraphLink {
+                kind: r.kind,
+                neighbour_label: r.label,
+                neighbour_project,
+            });
+        }
+        links
+    }
+
     /// Fetch recent Notes and References (within the config's
-    /// `recent_seed_hours`) and enrich each with its tag set. Used by
-    /// the cross-connection selector. Tag-fetches are per-row for
-    /// simplicity — v1 keeps the recency window short enough that
-    /// N+1 doesn't matter.
+    /// `recent_seed_hours`) and enrich each with its tag set *and* its
+    /// relation-graph neighbours. Used by the cross-connection
+    /// selector. Per-row fetches (tags, relations, each neighbour's
+    /// project) are an accepted N+1 — v1 keeps the recency window
+    /// short enough that the row count stays small.
     async fn load_recent_entities(&self) -> Result<Vec<RecentEntity>, levshell_data::DataError> {
         let horizon = Utc::now()
             - chrono::Duration::hours(self.config.recent_seed_hours.max(1) as i64);
@@ -190,6 +246,7 @@ impl IdeationModule {
                 continue;
             }
             let tags = self.store.get_tags(note.id, EntityType::Note).await?;
+            let graph_links = self.graph_links_for(note.id, EntityType::Note).await;
             out.push(RecentEntity {
                 id: note.id,
                 entity_type: EntityType::Note,
@@ -197,6 +254,7 @@ impl IdeationModule {
                 project_id: note.project_id,
                 tags,
                 updated_at: note.updated_at,
+                graph_links,
             });
         }
 
@@ -212,6 +270,7 @@ impl IdeationModule {
                 continue;
             }
             let tags = self.store.get_tags(r.id, EntityType::Reference).await?;
+            let graph_links = self.graph_links_for(r.id, EntityType::Reference).await;
             out.push(RecentEntity {
                 id: r.id,
                 entity_type: EntityType::Reference,
@@ -219,6 +278,7 @@ impl IdeationModule {
                 project_id: r.project_id,
                 tags,
                 updated_at: r.updated_at,
+                graph_links,
             });
         }
         Ok(out)
