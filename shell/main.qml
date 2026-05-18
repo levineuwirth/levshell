@@ -147,9 +147,12 @@ Scope {
     property var warmupPayload: ({ fired_at: "", events: [], anki_due_count: 0, projects: [] })
     // Upcoming-events feed for the clock dropdown (DaemonMessage::ClockHub).
     property var clockHubPayload: ({ generated_at: "", events: [] })
-    // CPU process sniper (§2.3.5, DaemonMessage::ProcessList).
+    // Process sniper (§2.3.5, DaemonMessage::ProcessList). Shared by
+    // the CPU and memory bar icons; `processSniperMode` ("cpu"|"mem")
+    // is the active ranking and drives the overlay title + re-requests.
     property bool processSniperOpen: false
-    property var processListPayload: ({ generated_at: "", processes: [] })
+    property string processSniperMode: "cpu"
+    property var processListPayload: ({ generated_at: "", sort: "cpu", processes: [] })
 
     // Rubber-duck (§2.12.6). Messages are plain objects
     //   { role: "user" | "assistant", content: string }
@@ -300,27 +303,32 @@ Scope {
             action: "open_log", data: {}
         });
     }
-    function openProcessSniper() {
+    // The sniper is shared between the CPU and memory bar icons; `mode`
+    // ("cpu" | "mem") is the ranking. The daemon sorts server-side
+    // (a top-by-CPU list would miss a high-memory/low-CPU process), so
+    // switching mode re-requests.
+    function openProcessSniper(mode) {
         // Open-and-refresh primitive: also used by the sniper's own
-        // `onRefresh` to re-request the list while it stays open, so
-        // this must NOT toggle.
+        // `onRefresh` to re-request while it stays open, so this must
+        // NOT toggle.
+        shell.processSniperMode = mode;
         shell.sendShellMessage({
             type: "widget_action", widget_id: "cpu",
-            action: "list_processes", data: {}
+            action: "list_processes", data: { sort: mode }
         });
         processSniperOpen = true;
     }
-    // Bar-icon click: collapse on re-click and be mutually exclusive
-    // with the other dropdowns, exactly like toggleClockHub() et al.
-    // (The CPU icon used to call openProcessSniper() directly, which
-    // is open-only — so a second click never closed it.)
-    function toggleProcessSniper() {
-        if (processSniperOpen) {
+    // Bar-icon click: collapse when re-clicking the icon for the view
+    // already showing; otherwise open (or switch ranking) and stay
+    // mutually exclusive with the other dropdowns, like
+    // toggleClockHub() et al.
+    function toggleProcessSniper(mode) {
+        if (processSniperOpen && shell.processSniperMode === mode) {
             processSniperOpen = false;
             return;
         }
         closeDropdownsExcept("processSniperOpen");
-        openProcessSniper();
+        openProcessSniper(mode);
     }
     function killProcess(pid, signal) {
         shell.sendShellMessage({
@@ -485,6 +493,7 @@ Scope {
         case "process_list": {
             shell.processListPayload = {
                 generated_at: msg.generated_at || "",
+                sort: msg.sort || "cpu",
                 processes: msg.processes || []
             };
             break;
@@ -1249,7 +1258,7 @@ Scope {
             isOpen: shell.processSniperOpen
             payload: shell.processListPayload
             onKill: (pid, signal) => shell.killProcess(pid, signal)
-            onRefresh: shell.openProcessSniper()
+            onRefresh: shell.openProcessSniper(shell.processSniperMode)
         }
     }
 

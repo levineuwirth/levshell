@@ -477,10 +477,13 @@ pub struct ProcInfo {
     pub mem_kb: u64,
 }
 
-/// Snapshot of the top resource-consuming processes, CPU-desc.
+/// Snapshot of the top resource-consuming processes, ranked by `sort`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProcessListPayload {
     /// RFC 3339 UTC of when the daemon sampled.
     pub generated_at: String,
+    /// Ranking key the rows are sorted by: `"cpu"` or `"mem"`. Lets the
+    /// shared sniper overlay title itself ("Top by CPU"/"by memory").
+    pub sort: String,
     pub processes: Vec<ProcInfo>,
 }

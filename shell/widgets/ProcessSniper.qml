@@ -72,7 +72,8 @@ Rectangle {
         Row {
             width: parent.width
             Text {
-                text: "Top processes"
+                text: root.payload.sort === "mem"
+                      ? "Top by memory" : "Top by CPU"
                 color: Theme.fg
                 font.family: Theme.fontText
                 font.pixelSize: Theme.typeTitle

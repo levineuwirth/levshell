@@ -32,11 +32,18 @@ const PAGE_KB: u64 = 4;
 
 pub struct ProcessSniperModule {
     publisher: WidgetPublisher,
+    /// The active ranking ("cpu" | "mem"). Set on each
+    /// `ProcessListRequested`; reused for the post-kill re-sample so
+    /// the list stays ordered the way the user is looking at it.
+    current_sort: String,
 }
 
 impl ProcessSniperModule {
     pub fn new(publisher: WidgetPublisher) -> Self {
-        Self { publisher }
+        Self {
+            publisher,
+            current_sort: "cpu".to_owned(),
+        }
     }
 }
 
@@ -81,7 +88,7 @@ fn list_pids() -> Vec<i32> {
 }
 
 impl ProcessSniperModule {
-    async fn publish_top(&self) {
+    async fn publish_top(&self, sort: &str) {
         let t0_pids = list_pids();
         let mut first: HashMap<i32, u64> = HashMap::with_capacity(t0_pids.len());
         for pid in &t0_pids {
@@ -106,15 +113,20 @@ impl ProcessSniperModule {
                 mem_kb: proc_rss_kb(pid),
             });
         }
-        rows.sort_by(|a, b| {
-            b.cpu_percent
-                .partial_cmp(&a.cpu_percent)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        if sort == "mem" {
+            rows.sort_by_key(|p| std::cmp::Reverse(p.mem_kb));
+        } else {
+            rows.sort_by(|a, b| {
+                b.cpu_percent
+                    .partial_cmp(&a.cpu_percent)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
         rows.truncate(TOP_N);
 
         let payload = ProcessListPayload {
             generated_at: Utc::now().to_rfc3339(),
+            sort: sort.to_owned(),
             processes: rows,
         };
         if let Err(e) = self
@@ -168,11 +180,15 @@ impl Module for ProcessSniperModule {
 
     async fn on_event(&mut self, event: &Event) -> ModuleResult<()> {
         match event {
-            Event::ProcessListRequested => self.publish_top().await,
+            Event::ProcessListRequested { sort } => {
+                self.current_sort = sort.clone();
+                self.publish_top(sort).await;
+            }
             Event::ProcessKillRequested { pid, signal } => {
                 Self::kill(*pid, signal);
-                // Re-sample so the list reflects the kill.
-                self.publish_top().await;
+                // Re-sample in the ranking the user is viewing.
+                let sort = self.current_sort.clone();
+                self.publish_top(&sort).await;
             }
             _ => {}
         }

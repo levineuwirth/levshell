@@ -22,6 +22,12 @@ WidgetWrapper {
     readonly property real usedGb: ((widgetState && widgetState.used_kb) || 0) / 1024.0 / 1024.0
     readonly property var history: (widgetState && widgetState.history) || []
 
+    // Click toggles the process sniper ranked by memory (spec §2.3.5),
+    // mirroring the CPU widget — same shared overlay, re-click
+    // collapses, opening it switches the ranking.
+    interactive: true
+    onClicked: shell.toggleProcessSniper("mem")
+
     Row {
         anchors.verticalCenter: parent.verticalCenter
         anchors.left: parent.left

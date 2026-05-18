@@ -208,10 +208,12 @@ pub enum Event {
         body: String,
     },
 
-    /// The CPU widget's process sniper was opened (spec §2.3.5). A
-    /// sniper module enumerates the top resource-consuming processes
-    /// and answers with `DaemonMessage::ProcessList`.
-    ProcessListRequested,
+    /// The process sniper was opened (spec §2.3.5). `sort` selects the
+    /// ranking — `"cpu"` (CPU widget) or `"mem"` (memory widget);
+    /// stringly-typed to keep `levshell-core` IPC-free, like
+    /// `BarDensityRequested`. The sniper module answers with
+    /// `DaemonMessage::ProcessList` (top-N by that key).
+    ProcessListRequested { sort: String },
 
     /// Send `signal` (e.g. `"TERM"`, `"KILL"`) to `pid` — the sniper's
     /// one-click / shift-click kill action.
@@ -330,7 +332,7 @@ impl Event {
             Event::DuckActionRequested { .. } => EventKind::DuckActionRequested,
             Event::DuckUserMessage { .. } => EventKind::DuckUserMessage,
             Event::CriticalEscalation { .. } => EventKind::CriticalEscalation,
-            Event::ProcessListRequested => EventKind::ProcessListRequested,
+            Event::ProcessListRequested { .. } => EventKind::ProcessListRequested,
             Event::ProcessKillRequested { .. } => EventKind::ProcessKillRequested,
             Event::WidgetActionReceived { .. } => EventKind::WidgetActionReceived,
             Event::NotifyRequested { .. } => EventKind::NotifyRequested,
