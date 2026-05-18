@@ -219,6 +219,7 @@ Scope {
         if (keep !== "refLibraryOpen")         refLibraryOpen = false;
         if (keep !== "projectPulseOpen")       projectPulseOpen = false;
         if (keep !== "arxivWatchOpen")         arxivWatchOpen = false;
+        if (keep !== "processSniperOpen")      processSniperOpen = false;
     }
     function toggleNotificationCenter() {
         notificationCenterOpen = !notificationCenterOpen;
@@ -300,11 +301,26 @@ Scope {
         });
     }
     function openProcessSniper() {
+        // Open-and-refresh primitive: also used by the sniper's own
+        // `onRefresh` to re-request the list while it stays open, so
+        // this must NOT toggle.
         shell.sendShellMessage({
             type: "widget_action", widget_id: "cpu",
             action: "list_processes", data: {}
         });
         processSniperOpen = true;
+    }
+    // Bar-icon click: collapse on re-click and be mutually exclusive
+    // with the other dropdowns, exactly like toggleClockHub() et al.
+    // (The CPU icon used to call openProcessSniper() directly, which
+    // is open-only — so a second click never closed it.)
+    function toggleProcessSniper() {
+        if (processSniperOpen) {
+            processSniperOpen = false;
+            return;
+        }
+        closeDropdownsExcept("processSniperOpen");
+        openProcessSniper();
     }
     function killProcess(pid, signal) {
         shell.sendShellMessage({
