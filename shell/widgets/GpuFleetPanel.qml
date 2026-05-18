@@ -20,7 +20,7 @@ Rectangle {
     property var payload: ({ hosts: [] })
     readonly property var hosts: (payload && payload.hosts) || []
 
-    implicitWidth: 380
+    implicitWidth: Math.round(380 * Theme.uiScale)
     implicitHeight: col.implicitHeight + 2 * Theme.panelInnerPadding
 
     color: Qt.rgba(Theme.surface.r, Theme.surface.g, Theme.surface.b,
@@ -141,7 +141,7 @@ Rectangle {
                         id: gpuRow
                         required property var modelData
                         width: hostSection.width
-                        height: 34
+                        height: Math.round(34 * Theme.uiScale)
 
                         readonly property real memFrac:
                             modelData.memory_total_mb > 0

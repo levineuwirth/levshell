@@ -23,7 +23,7 @@ Rectangle {
     // Emitted with the host's `name` (the stable id, not display_name).
     signal reconnect(string host)
 
-    implicitWidth: 340
+    implicitWidth: Math.round(340 * Theme.uiScale)
     implicitHeight: col.implicitHeight + 2 * Theme.panelInnerPadding
 
     color: Qt.rgba(Theme.surface.r, Theme.surface.g, Theme.surface.b,
@@ -99,7 +99,7 @@ Rectangle {
                     id: hostRow
                     required property var modelData
                     width: parent.width
-                    height: 38
+                    height: Math.round(38 * Theme.uiScale)
                     radius: 4
                     color: rowHit.containsMouse ? Theme.surfaceRaised : "transparent"
 
@@ -150,7 +150,7 @@ Rectangle {
                         Text {
                             id: latC
                             anchors.verticalCenter: parent.verticalCenter
-                            width: 52
+                            width: Math.round(52 * Theme.uiScale)
                             horizontalAlignment: Text.AlignRight
                             text: modelData.reachable && modelData.latency_ms !== null
                                   ? modelData.latency_ms + "ms" : "—"

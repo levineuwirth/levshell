@@ -83,7 +83,7 @@ Rectangle {
         return cells;
     }
 
-    implicitWidth: 380
+    implicitWidth: Math.round(380 * Theme.uiScale)
     implicitHeight: headerCol.implicitHeight + 2 * Theme.panelInnerPadding
 
     color: Qt.rgba(Theme.surface.r, Theme.surface.g, Theme.surface.b,
@@ -172,11 +172,11 @@ Rectangle {
                 delegate: Item {
                     required property int modelData
                     width: parent.width / 7
-                    height: 28
+                    height: Math.round(28 * Theme.uiScale)
 
                     Rectangle {
                         anchors.centerIn: parent
-                        width: 24; height: 24; radius: 12
+                        width: Math.round(24 * Theme.uiScale); height: Math.round(24 * Theme.uiScale); radius: width / 2
                         color: modelData === root.today ? Theme.primary : "transparent"
                         visible: modelData > 0
                     }
@@ -249,7 +249,7 @@ Rectangle {
                     spacing: Theme.spaceMd
 
                     Text {
-                        width: 84
+                        width: Math.round(84 * Theme.uiScale)
                         text: root.fmtTime(ev.start_at)
                         color: Theme.fgSubtle
                         font.family: Theme.fontMono
@@ -257,7 +257,7 @@ Rectangle {
                         font.features: ({ "tnum": 1 })
                     }
                     Column {
-                        width: parent.width - 84 - Theme.spaceMd
+                        width: parent.width - Math.round(84 * Theme.uiScale) - Theme.spaceMd
                         Text {
                             width: parent.width
                             elide: Text.ElideRight

@@ -31,7 +31,8 @@ pub use messages::{
     CriticalEscalation, DaemonMessage, DensityChange, DuckSay, DuckToken, EscalationLevel,
     Nudge, PowerState, PresentationMode, Prominence, ShellMessage, ThemeBar, ThemeColors,
     ThemeHealth, ThemeIcons,
-    ThemePayload, ThemeTypography, WarmupEvent, WarmupPayload, WarmupProject, WidgetAction,
+    ThemePayload, ThemeTypography, UiScaleState, WarmupEvent, WarmupPayload, WarmupProject,
+    WidgetAction,
     WidgetStatus, WidgetUpdate, WidgetVisibility,
 };
 pub use publisher::{spawn_writer_task, WidgetPublisher, WriterTask};

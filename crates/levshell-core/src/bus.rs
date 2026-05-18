@@ -66,6 +66,11 @@ pub enum Event {
     /// `"compact"`, or `"hidden"`.
     BarDensityRequested { mode: String },
 
+    /// A ctl client requested a UI-scale change. Stringly-typed for the
+    /// same reason as [`Self::BarDensityRequested`]: the decimal factor
+    /// (e.g. `"1.75"`) or the `"cycle"` sentinel.
+    UiScaleRequested { value: String },
+
     /// A ctl client requested a context-profile action. `action` is one of
     /// `"activate"`, `"cycle"`, or `"query"`. `name` is the profile name
     /// for `activate`, optional otherwise.
@@ -275,6 +280,7 @@ pub enum EventKind {
     PowerStateChanged,
     AcLineChanged,
     BarDensityRequested,
+    UiScaleRequested,
     ProfileActionRequested,
     PaletteActionRequested,
     CommandPaletteQueryReceived,
@@ -308,6 +314,7 @@ impl Event {
             Event::PowerStateChanged { .. } => EventKind::PowerStateChanged,
             Event::AcLineChanged { .. } => EventKind::AcLineChanged,
             Event::BarDensityRequested { .. } => EventKind::BarDensityRequested,
+            Event::UiScaleRequested { .. } => EventKind::UiScaleRequested,
             Event::ProfileActionRequested { .. } => EventKind::ProfileActionRequested,
             Event::PaletteActionRequested { .. } => EventKind::PaletteActionRequested,
             Event::CommandPaletteQueryReceived { .. } => EventKind::CommandPaletteQueryReceived,

@@ -25,6 +25,7 @@ pub enum DaemonMessage {
     BarLayout(BarLayout),
     PowerState(PowerState),
     BarDensityState(BarDensityState),
+    UiScaleState(UiScaleState),
     /// Full theme payload sent on shell connect and whenever
     /// `levshell-ctl theme set` activates a new theme. Fields mirror
     /// the TOML structure (spec design doc §11) as partial overrides
@@ -234,6 +235,15 @@ pub struct PowerState {
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BarDensityState {
     pub mode: BarDensity,
+}
+
+/// Resolved UI scale, pushed when a ctl client changes it (mirrors
+/// [`BarDensityState`]). The shell binds `Theme.uiScale` to `factor`;
+/// its committed default holds until the first change, since there is
+/// no config-file persistence. Not `Eq` — `f64`.
+#[derive(Debug, Copy, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UiScaleState {
+    pub factor: f64,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -692,6 +692,22 @@ async fn dispatch_ctl_request(request: CtlRequest, state: &SharedState) -> CtlRe
             CtlResponse::Ok
         }
 
+        CtlRequest::SetScale { factor } => {
+            // Already a validated decimal string from the ctl client;
+            // passed through verbatim like the density mode string.
+            state.bus.publish(Event::UiScaleRequested { value: factor });
+            CtlResponse::Ok
+        }
+
+        CtlRequest::ScaleCycle => {
+            // Same posture as DensityCycle: the context engine resolves
+            // the next step from the stored `ui.scale` signal.
+            state.bus.publish(Event::UiScaleRequested {
+                value: "cycle".to_owned(),
+            });
+            CtlResponse::Ok
+        }
+
         CtlRequest::Profile { action, name } => {
             let action_str = match action {
                 ProfileAction::Activate => "activate",
