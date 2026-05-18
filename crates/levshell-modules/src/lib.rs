@@ -53,7 +53,7 @@ pub use rubber_duck::{
     default_rubber_duck_config_path, RubberDuckConfig, RubberDuckConfigError, RubberDuckModule,
 };
 pub use ideation::{
-    IdeationConfig, IdeationConfigError, IdeationModule, Nudge, NudgeContext, NudgeKind,
+    GraphLink, IdeationConfig, IdeationConfigError, IdeationModule, Nudge, NudgeContext, NudgeKind,
     NudgeSelector, NudgeWeights, RecentEntity,
 };
 pub use interruption::{
