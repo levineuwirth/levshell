@@ -94,11 +94,10 @@ fn parse_fields(block: &str) -> Frontmatter {
         let key = key.trim();
         let value = value.trim();
         match key {
-            "title" => {
-                if !value.is_empty() {
+            "title"
+                if !value.is_empty() => {
                     fm.title = Some(value.trim_matches(['"', '\'']).to_string());
                 }
-            }
             "tags" => {
                 if value.is_empty() {
                     // Tags are on following lines as "- tag" entries.
