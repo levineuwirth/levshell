@@ -163,9 +163,10 @@ Scope {
     property var currentNudge: ({ kind: "", title: "" })
     property bool nudgeVisible: false
     function showNudge(msg) {
-        // The daemon already drops nudges in presentation mode; guard
-        // here too in case one was in flight when the mode flipped.
-        if (shell.presentationMode) return;
+        // The daemon already drops nudges in presentation mode and
+        // during a work session; guard here too in case one was in
+        // flight when the quiet state flipped.
+        if (shell.quietMode) return;
         shell.currentNudge = { kind: msg.kind || "", title: msg.title || "" };
         shell.nudgeVisible = true;
         nudgeDismissTimer.restart();
@@ -185,6 +186,21 @@ Scope {
         (shell.widgetStates["session-timer"] || ({})).paused === true
     readonly property bool sessionRunning:
         sessionPhase === "work" || sessionPhase === "break"
+
+    // Spec §10: automatic content-muting. A work session quiets the
+    // desktop the same way manual presentation mode does — that's the
+    // whole point of starting a focus session. A mid-session *pause*
+    // stays muted: you're still notionally in the session, and the
+    // daemon's `focus_work` (derived from FocusSession events, which a
+    // pause does not emit) stays set regardless — so the bar must not
+    // visibly un-recede while notifications are still being swallowed.
+    // The two are independent inputs OR'd into one effective quiet
+    // state; ending the Pomodoro must not clear a manually-set
+    // presentation mode, and vice-versa.
+    readonly property bool focusWorkActive:
+        sessionPhase === "work"
+    readonly property bool quietMode:
+        presentationMode || focusWorkActive
 
     // Close every bar dropdown except `keep` (a property name or "").
     function closeDropdownsExcept(keep) {
@@ -419,8 +435,9 @@ Scope {
             break;
         }
         case "warmup": {
-            // Non-critical surface — suppressed during a talk.
-            if (shell.presentationMode) break;
+            // Non-critical surface — suppressed during a talk or a
+            // running work session.
+            if (shell.quietMode) break;
             shell.warmupPayload = {
                 fired_at: msg.fired_at || "",
                 events: msg.events || [],
@@ -445,6 +462,10 @@ Scope {
             break;
         }
         case "duck_open": {
+            // Guarded by presentation mode only, not the broader quiet
+            // state: the duck is an explicitly user-invoked focus *aid*
+            // (`ctl duck open`), so a running work session must not
+            // swallow it — only a talk/screen-share should.
             if (shell.presentationMode) break;
             shell.duckOpen = true;
             break;
@@ -759,6 +780,7 @@ Scope {
                             item.status = Qt.binding(() => shell.statusFor(modelData));
                             item.prominence = Qt.binding(() => shell.prominenceFor(modelData));
                             item.escalation = Qt.binding(() => shell.escalationFor(modelData));
+                            item.quiet = Qt.binding(() => shell.quietMode);
                         }
                     }
                 }
@@ -782,6 +804,7 @@ Scope {
                             item.status = Qt.binding(() => shell.statusFor(modelData));
                             item.prominence = Qt.binding(() => shell.prominenceFor(modelData));
                             item.escalation = Qt.binding(() => shell.escalationFor(modelData));
+                            item.quiet = Qt.binding(() => shell.quietMode);
                         }
                     }
                 }
@@ -806,6 +829,7 @@ Scope {
                             item.status = Qt.binding(() => shell.statusFor(modelData));
                             item.prominence = Qt.binding(() => shell.prominenceFor(modelData));
                             item.escalation = Qt.binding(() => shell.escalationFor(modelData));
+                            item.quiet = Qt.binding(() => shell.quietMode);
                         }
                     }
                 }

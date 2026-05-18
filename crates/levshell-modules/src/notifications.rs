@@ -101,10 +101,19 @@ impl NotificationSender for NotifyRustSender {
 pub struct NotificationsModule {
     publisher: WidgetPublisher,
     sender: Arc<dyn NotificationSender>,
-    /// Presentation mode (spec §2.18): when set, ideation nudges and
-    /// low/normal ctl notifications are dropped. Critical escalations
-    /// always pass — that's the whole point of the escape hatch.
+    /// Presentation mode (spec §2.18): manual mute for talks /
+    /// screen-sharing.
     presentation: bool,
+    /// A non-paused *work* focus session is running (spec §10): the
+    /// automatic sibling of presentation mode. Derived from the
+    /// `FocusSessionStarted`/`Ended` events the session-timer already
+    /// emits — no new wire surface.
+    ///
+    /// Either flag drops ideation nudges and low/normal ctl
+    /// notifications; Critical escalations always pass (the escape
+    /// hatch). They're independent: ending a Pomodoro must not clear a
+    /// manually-set presentation mode.
+    focus_work: bool,
 }
 
 impl NotificationsModule {
@@ -113,7 +122,13 @@ impl NotificationsModule {
             publisher,
             sender,
             presentation: false,
+            focus_work: false,
         }
+    }
+
+    /// Effective quiet state — either input mutes non-critical surfaces.
+    fn quiet(&self) -> bool {
+        self.presentation || self.focus_work
     }
 
     /// Production constructor — wires in [`NotifyRustSender`].
@@ -134,6 +149,8 @@ impl Module for NotificationsModule {
             EventKind::NudgeDelivered,
             EventKind::NotifyRequested,
             EventKind::PresentationModeChanged,
+            EventKind::FocusSessionStarted,
+            EventKind::FocusSessionEnded,
         ]
     }
 
@@ -182,10 +199,12 @@ impl Module for NotificationsModule {
             // transient toast even when another daemon owns
             // org.freedesktop.Notifications (spec §2.9.2).
             Event::NudgeDelivered { kind, title, .. } => {
-                if self.presentation {
+                if self.quiet() {
                     tracing::debug!(
                         kind = %kind,
-                        "notifications: nudge suppressed (presentation mode)"
+                        presentation = self.presentation,
+                        focus_work = self.focus_work,
+                        "notifications: nudge suppressed (quiet mode)"
                     );
                     return Ok(());
                 }
@@ -227,10 +246,12 @@ impl Module for NotificationsModule {
                 body,
                 urgency,
             } => {
-                if self.presentation && urgency != "critical" {
+                if self.quiet() && urgency != "critical" {
                     tracing::debug!(
                         urgency = %urgency,
-                        "notifications: ctl notify suppressed (presentation mode)"
+                        presentation = self.presentation,
+                        focus_work = self.focus_work,
+                        "notifications: ctl notify suppressed (quiet mode)"
                     );
                     return Ok(());
                 }
@@ -252,13 +273,27 @@ impl Module for NotificationsModule {
                     Ok(Ok(())) => {}
                 }
             }
-            // Presentation mode (spec §2.18) flips the gate for nudges
-            // and non-critical ctl notifications above. Critical
-            // escalations are unaffected — they bypass this flag
-            // entirely.
+            // Presentation mode (spec §2.18) and a running work session
+            // (spec §10) both flip the gate for nudges and non-critical
+            // ctl notifications above. Critical escalations are
+            // unaffected — they bypass these flags entirely.
             Event::PresentationModeChanged { on } => {
                 self.presentation = *on;
                 tracing::info!(on = *on, "notifications: presentation mode");
+            }
+            // §10 automatic quiet: derive from the session-timer's
+            // existing focus events. A work session mutes; a break or
+            // any session end un-mutes. (A mid-session *pause* doesn't
+            // emit an event and intentionally stays muted — you're
+            // still notionally in the session.)
+            Event::FocusSessionStarted { kind, .. } => {
+                self.focus_work = kind == "work";
+                tracing::debug!(kind = %kind, focus_work = self.focus_work,
+                    "notifications: focus session started");
+            }
+            Event::FocusSessionEnded { .. } => {
+                self.focus_work = false;
+                tracing::debug!("notifications: focus session ended");
             }
             _ => {}
         }
@@ -470,11 +505,13 @@ mod tests {
         let task = spawn_writer_task(w, 4);
         let m = NotificationsModule::new(task.publisher, spy);
         let subs = m.subscribed_events();
-        assert_eq!(subs.len(), 4);
+        assert_eq!(subs.len(), 6);
         assert!(subs.contains(&EventKind::CriticalEscalation));
         assert!(subs.contains(&EventKind::NudgeDelivered));
         assert!(subs.contains(&EventKind::NotifyRequested));
         assert!(subs.contains(&EventKind::PresentationModeChanged));
+        assert!(subs.contains(&EventKind::FocusSessionStarted));
+        assert!(subs.contains(&EventKind::FocusSessionEnded));
     }
 
     #[tokio::test]
@@ -578,5 +615,132 @@ mod tests {
             1,
             "nudges resume after presentation off"
         );
+    }
+
+    #[tokio::test]
+    async fn work_session_mutes_nudges_break_and_end_unmute() {
+        let spy = Arc::new(SpySender::with_result(Ok(())));
+        let (mut module, _fwd) = module_with_spy(spy.clone()).await;
+
+        // Work session → muted.
+        module
+            .on_event(&Event::FocusSessionStarted {
+                kind: "work".into(),
+                project: None,
+                planned_secs: 1500,
+            })
+            .await
+            .unwrap();
+        module
+            .on_event(&Event::NudgeDelivered {
+                project_id: uuid::Uuid::nil(),
+                kind: "open_question".into(),
+                title: "during work".into(),
+            })
+            .await
+            .unwrap();
+        assert!(spy.nudges().is_empty(), "work session must mute nudges");
+
+        // Break session → un-muted (the spec wants the breather usable).
+        module
+            .on_event(&Event::FocusSessionStarted {
+                kind: "break".into(),
+                project: None,
+                planned_secs: 300,
+            })
+            .await
+            .unwrap();
+        module
+            .on_event(&Event::NudgeDelivered {
+                project_id: uuid::Uuid::nil(),
+                kind: "open_question".into(),
+                title: "during break".into(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(spy.nudges().len(), 1, "break must not mute");
+
+        // Back to work, then session ends → un-muted again.
+        module
+            .on_event(&Event::FocusSessionStarted {
+                kind: "work".into(),
+                project: None,
+                planned_secs: 1500,
+            })
+            .await
+            .unwrap();
+        module
+            .on_event(&Event::FocusSessionEnded {
+                kind: "work".into(),
+                project: None,
+                actual_secs: 1500,
+            })
+            .await
+            .unwrap();
+        module
+            .on_event(&Event::NudgeDelivered {
+                project_id: uuid::Uuid::nil(),
+                kind: "open_question".into(),
+                title: "after end".into(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(spy.nudges().len(), 2, "session end resumes nudges");
+    }
+
+    #[tokio::test]
+    async fn focus_and_presentation_are_independent_inputs() {
+        let spy = Arc::new(SpySender::with_result(Ok(())));
+        let (mut module, _fwd) = module_with_spy(spy.clone()).await;
+
+        // Both on.
+        module
+            .on_event(&Event::PresentationModeChanged { on: true })
+            .await
+            .unwrap();
+        module
+            .on_event(&Event::FocusSessionStarted {
+                kind: "work".into(),
+                project: None,
+                planned_secs: 1500,
+            })
+            .await
+            .unwrap();
+        // Work session ends — presentation mode must keep muting.
+        module
+            .on_event(&Event::FocusSessionEnded {
+                kind: "work".into(),
+                project: None,
+                actual_secs: 1500,
+            })
+            .await
+            .unwrap();
+        module
+            .on_event(&Event::NudgeDelivered {
+                project_id: uuid::Uuid::nil(),
+                kind: "open_question".into(),
+                title: "still presenting".into(),
+            })
+            .await
+            .unwrap();
+        assert!(
+            spy.nudges().is_empty(),
+            "presentation mode still mutes after the session ends"
+        );
+
+        // Now drop presentation too → un-muted.
+        module
+            .on_event(&Event::PresentationModeChanged { on: false })
+            .await
+            .unwrap();
+        module
+            .on_event(&Event::NudgeDelivered {
+                project_id: uuid::Uuid::nil(),
+                kind: "open_question".into(),
+                title: "clear".into(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(spy.nudges().len(), 1);
     }
 }
