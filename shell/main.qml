@@ -187,14 +187,18 @@ Scope {
     readonly property bool sessionRunning:
         sessionPhase === "work" || sessionPhase === "break"
 
-    // Spec §10: automatic content-muting. A running (non-paused) work
-    // session quiets the desktop the same way manual presentation mode
-    // does — that's the whole point of starting a focus session. The
-    // two are independent inputs OR'd into one effective quiet state;
-    // ending the Pomodoro must not clear a manually-set presentation
-    // mode, and vice-versa.
+    // Spec §10: automatic content-muting. A work session quiets the
+    // desktop the same way manual presentation mode does — that's the
+    // whole point of starting a focus session. A mid-session *pause*
+    // stays muted: you're still notionally in the session, and the
+    // daemon's `focus_work` (derived from FocusSession events, which a
+    // pause does not emit) stays set regardless — so the bar must not
+    // visibly un-recede while notifications are still being swallowed.
+    // The two are independent inputs OR'd into one effective quiet
+    // state; ending the Pomodoro must not clear a manually-set
+    // presentation mode, and vice-versa.
     readonly property bool focusWorkActive:
-        sessionPhase === "work" && !sessionPaused
+        sessionPhase === "work"
     readonly property bool quietMode:
         presentationMode || focusWorkActive
 
