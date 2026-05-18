@@ -33,6 +33,7 @@ pub mod caldav;
 pub mod engine;
 pub mod mlflow;
 pub mod obsidian;
+pub mod wandb;
 pub mod zotero;
 
 pub use adapter::{
@@ -48,6 +49,7 @@ pub use caldav::{
 };
 pub use engine::{SyncEngine, SyncEngineConfig, SyncEngineHandle};
 pub use mlflow::{MlflowAdapter, MlflowConfig, MlflowConfigError};
+pub use wandb::{WandbAdapter, WandbConfig, WandbConfigError};
 pub use obsidian::{
     ObsidianAdapter, ObsidianConfig, ObsidianConfigError, ObsidianConfigWatcher,
 };
