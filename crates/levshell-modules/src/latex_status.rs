@@ -94,8 +94,14 @@ impl LatexStatusModule {
             // name → up to ENGINES.len() syscalls per process per tick).
             let comm = Self::proc_comm(pid);
             if ENGINES.iter().any(|e| comm == *e) {
-                let cwd = std::fs::read_link(format!("/proc/{pid}/cwd"))
-                    .unwrap_or_else(|_| PathBuf::from("."));
+                // If the build dir can't be resolved (perm denied, or
+                // the engine raced an exit), skip it rather than fall
+                // back to the daemon's own cwd — that would make
+                // newest_log scan an unrelated directory and report a
+                // wrong/stale log on completion. Keep scanning.
+                let Ok(cwd) = std::fs::read_link(format!("/proc/{pid}/cwd")) else {
+                    continue;
+                };
                 return Some((pid, cwd));
             }
         }

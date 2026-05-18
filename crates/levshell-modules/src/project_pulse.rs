@@ -62,7 +62,7 @@ impl ProjectPulseModule {
         // Tasks with a due date in the window that aren't finished.
         // `ListTasks` has no due filter, so bound the scan and filter
         // the date range in memory.
-        if let Ok(tasks) = self
+        match self
             .store
             .list_tasks(ListTasks {
                 limit: Some(500),
@@ -70,29 +70,35 @@ impl ProjectPulseModule {
             })
             .await
         {
-            for t in tasks {
-                if matches!(t.status, TaskStatus::Done | TaskStatus::Cancelled) {
-                    continue;
-                }
-                if let Some(due) = t.due_at {
-                    if due > horizon {
+            Err(e) => tracing::warn!(
+                error = %e,
+                "project-pulse: list_tasks failed; deadlines may be incomplete"
+            ),
+            Ok(tasks) => {
+                for t in tasks {
+                    if matches!(t.status, TaskStatus::Done | TaskStatus::Cancelled) {
                         continue;
                     }
-                    out.push((
-                        due,
-                        serde_json::json!({
-                            "title": t.title,
-                            "due": due.to_rfc3339(),
-                            "kind": "task",
-                            "overdue": due < now,
-                        }),
-                    ));
+                    if let Some(due) = t.due_at {
+                        if due > horizon {
+                            continue;
+                        }
+                        out.push((
+                            due,
+                            serde_json::json!({
+                                "title": t.title,
+                                "due": due.to_rfc3339(),
+                                "kind": "task",
+                                "overdue": due < now,
+                            }),
+                        ));
+                    }
                 }
             }
         }
 
         // Calendar events starting within the window.
-        if let Ok(events) = self
+        match self
             .store
             .list_events(ListEvents {
                 after: Some(now),
@@ -102,16 +108,22 @@ impl ProjectPulseModule {
             })
             .await
         {
-            for e in events {
-                out.push((
-                    e.start_at,
-                    serde_json::json!({
-                        "title": e.title,
-                        "due": e.start_at.to_rfc3339(),
-                        "kind": "event",
-                        "overdue": false,
-                    }),
-                ));
+            Err(e) => tracing::warn!(
+                error = %e,
+                "project-pulse: list_events failed; deadlines may be incomplete"
+            ),
+            Ok(events) => {
+                for e in events {
+                    out.push((
+                        e.start_at,
+                        serde_json::json!({
+                            "title": e.title,
+                            "due": e.start_at.to_rfc3339(),
+                            "kind": "event",
+                            "overdue": false,
+                        }),
+                    ));
+                }
             }
         }
 

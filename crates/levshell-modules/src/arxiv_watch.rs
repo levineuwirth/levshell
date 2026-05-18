@@ -79,8 +79,24 @@ impl ArxivConfig {
 }
 
 fn quote(s: &str) -> String {
-    // arXiv wants %22 around multi-word phrases; spaces → +.
-    format!("%22{}%22", s.trim().replace(' ', "+"))
+    // arXiv wants %22 around phrases and `+` for spaces. Every other
+    // non-unreserved byte is percent-encoded so a configured term
+    // containing reserved URL chars (`&`, `#`, `?`, `=`, …) can't
+    // malform the query (e.g. a keyword like `C#`). Iterating bytes
+    // keeps this UTF-8 correct (multibyte chars encode per byte).
+    let mut out = String::with_capacity(s.len() + 6);
+    out.push_str("%22");
+    for b in s.trim().as_bytes() {
+        match b {
+            b' ' => out.push('+'),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(*b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out.push_str("%22");
+    out
 }
 
 fn default_seen_path() -> PathBuf {
