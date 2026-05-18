@@ -24,3 +24,10 @@ RemoteJobsPanel 1.0 RemoteJobsPanel.qml
 SshDashboard 1.0 SshDashboard.qml
 SshFleetPanel 1.0 SshFleetPanel.qml
 SessionTimerWidget 1.0 SessionTimerWidget.qml
+ReferenceLibraryWidget 1.0 ReferenceLibraryWidget.qml
+ReferenceLibraryPanel 1.0 ReferenceLibraryPanel.qml
+ProjectPulseWidget 1.0 ProjectPulseWidget.qml
+ProjectPulsePanel 1.0 ProjectPulsePanel.qml
+LatexStatusWidget 1.0 LatexStatusWidget.qml
+ArxivWatchWidget 1.0 ArxivWatchWidget.qml
+ArxivWatchPanel 1.0 ArxivWatchPanel.qml

@@ -31,6 +31,7 @@ pub mod adapter;
 pub mod ankiconnect;
 pub mod caldav;
 pub mod engine;
+pub mod mlflow;
 pub mod obsidian;
 pub mod zotero;
 
@@ -46,6 +47,7 @@ pub use caldav::{
     CalDavError, CalDavHttpClient, CalendarSource, DavEntry,
 };
 pub use engine::{SyncEngine, SyncEngineConfig, SyncEngineHandle};
+pub use mlflow::{MlflowAdapter, MlflowConfig, MlflowConfigError};
 pub use obsidian::{
     ObsidianAdapter, ObsidianConfig, ObsidianConfigError, ObsidianConfigWatcher,
 };

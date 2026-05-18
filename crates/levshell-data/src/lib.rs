@@ -22,5 +22,5 @@ pub use models::{
     Reference, ReferencePatch, Relation, SyncDirection, SyncMetadata, Task, TaskPatch,
     TaskPriority, TaskStatus,
 };
-pub use ops::{NoteSearchHit, ReferenceSearchHit};
+pub use ops::{NoteSearchHit, ReferenceSearchHit, SCAFFOLD_RELATION_KIND};
 pub use store::DataStore;

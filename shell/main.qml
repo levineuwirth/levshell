@@ -122,6 +122,15 @@ Scope {
     // Remote SLURM jobs dropdown (§2.10.3); host/job list is the
     // `remote-jobs` widget state.
     property bool remoteJobsOpen: false
+    // Reference-library dropdown (§2.9.8); stats + recent papers from
+    // the `reference-library` widget state.
+    property bool refLibraryOpen: false
+    // Project-pulse dropdown (§2.9.4/§2.9.12); project dashboard +
+    // deadlines from the `project-pulse` widget state.
+    property bool projectPulseOpen: false
+    // arXiv watcher dropdown (§2.9.9); new papers from the
+    // `arxiv-watch` widget state.
+    property bool arxivWatchOpen: false
     // Bar density as chosen by the daemon. Theme.density is bound to an
     // *effective* value (see the Binding by the bar): in hidden mode,
     // pointing at the top screen edge transiently reveals the full bar
@@ -178,6 +187,9 @@ Scope {
         if (keep !== "sshFleetOpen")           sshFleetOpen = false;
         if (keep !== "gpuFleetOpen")           gpuFleetOpen = false;
         if (keep !== "remoteJobsOpen")         remoteJobsOpen = false;
+        if (keep !== "refLibraryOpen")         refLibraryOpen = false;
+        if (keep !== "projectPulseOpen")       projectPulseOpen = false;
+        if (keep !== "arxivWatchOpen")         arxivWatchOpen = false;
     }
     function toggleNotificationCenter() {
         notificationCenterOpen = !notificationCenterOpen;
@@ -203,6 +215,37 @@ Scope {
         remoteJobsOpen = !remoteJobsOpen;
         if (remoteJobsOpen) closeDropdownsExcept("remoteJobsOpen");
     }
+    function toggleRefLibrary() {
+        refLibraryOpen = !refLibraryOpen;
+        if (refLibraryOpen) closeDropdownsExcept("refLibraryOpen");
+    }
+    function toggleProjectPulse() {
+        projectPulseOpen = !projectPulseOpen;
+        if (projectPulseOpen) closeDropdownsExcept("projectPulseOpen");
+    }
+    function toggleArxivWatch() {
+        arxivWatchOpen = !arxivWatchOpen;
+        if (arxivWatchOpen) {
+            closeDropdownsExcept("arxivWatchOpen");
+            // Opening the list is the acknowledgement — clear the badge.
+            shell.sendShellMessage({
+                type: "widget_action", widget_id: "arxiv-watch",
+                action: "ack", data: {}
+            });
+        }
+    }
+    function sendArxivOpen(url) {
+        shell.sendShellMessage({
+            type: "widget_action", widget_id: "arxiv-watch",
+            action: "open", data: { url: url }
+        });
+    }
+    function sendRefCopy(citekey) {
+        shell.sendShellMessage({
+            type: "widget_action", widget_id: "reference-library",
+            action: "copy", data: { citekey: citekey }
+        });
+    }
     function sendSshReconnect(host) {
         shell.sendShellMessage({
             type: "widget_action", widget_id: "ssh-fleet",
@@ -213,6 +256,12 @@ Scope {
         shell.sendShellMessage({
             type: "widget_action", widget_id: "session-timer",
             action: "toggle", data: {}
+        });
+    }
+    function sendLatexOpenLog() {
+        shell.sendShellMessage({
+            type: "widget_action", widget_id: "latex-status",
+            action: "open_log", data: {}
         });
     }
     function openProcessSniper() {
@@ -266,7 +315,11 @@ Scope {
         "gpu-fleet": gpuDashboardComponent,
         "remote-jobs": remoteJobsComponent,
         "anki-due": ankiDueComponent,
-        "session-timer": sessionTimerComponent
+        "session-timer": sessionTimerComponent,
+        "reference-library": referenceLibraryComponent,
+        "project-pulse": projectPulseComponent,
+        "latex-status": latexStatusComponent,
+        "arxiv-watch": arxivWatchComponent
     })
 
     Component { id: workspaceIndicatorComponent; WorkspaceIndicator {} }
@@ -284,6 +337,10 @@ Scope {
     Component { id: remoteJobsComponent; RemoteJobsWidget {} }
     Component { id: ankiDueComponent; AnkiDueWidget {} }
     Component { id: sessionTimerComponent; SessionTimerWidget {} }
+    Component { id: referenceLibraryComponent; ReferenceLibraryWidget {} }
+    Component { id: projectPulseComponent; ProjectPulseWidget {} }
+    Component { id: latexStatusComponent; LatexStatusWidget {} }
+    Component { id: arxivWatchComponent; ArxivWatchWidget {} }
 
     // ----------------------------------------------------------------------
     // Dispatch a parsed DaemonMessage into the state stores.
@@ -1267,6 +1324,175 @@ Scope {
             anchors.topMargin: Theme.barHeight + Theme.spaceSm
             isOpen: shell.remoteJobsOpen
             payload: shell.stateFor("remote-jobs") || ({ hosts: [] })
+        }
+    }
+
+    // ----------------------------------------------------------------------
+    // Reference library detail overlay (§2.9.8).
+    // ----------------------------------------------------------------------
+    PanelWindow {
+        id: refLibraryWindow
+
+        property bool isClosing: false
+        visible: shell.refLibraryOpen || isClosing
+
+        Connections {
+            target: shell
+            function onRefLibraryOpenChanged() {
+                if (shell.refLibraryOpen) {
+                    refLibraryWindow.isClosing = false;
+                    refLibraryCloseTimer.stop();
+                } else if (refLibraryWindow.visible && !refLibraryWindow.isClosing) {
+                    refLibraryWindow.isClosing = true;
+                    refLibraryCloseTimer.restart();
+                }
+            }
+        }
+
+        Timer {
+            id: refLibraryCloseTimer
+            interval: Theme.motionSlow + 50
+            onTriggered: refLibraryWindow.isClosing = false
+        }
+
+        WlrLayershell.layer: WlrLayer.Overlay
+        WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+        WlrLayershell.namespace: "levshell-reference-library"
+
+        BackgroundEffect.blurRegion: Region {
+            item: refLibraryPanel
+        }
+
+        anchors { top: true; left: true; right: true; bottom: true }
+        color: "transparent"
+
+        MouseArea {
+            anchors.fill: parent
+            onClicked: shell.refLibraryOpen = false
+        }
+
+        ReferenceLibraryPanel {
+            id: refLibraryPanel
+            anchors.right: parent.right
+            anchors.rightMargin: Theme.spaceLg
+            anchors.top: parent.top
+            anchors.topMargin: Theme.barHeight + Theme.spaceSm
+            isOpen: shell.refLibraryOpen
+            payload: shell.stateFor("reference-library")
+                     || ({ total: 0, unread: 0, recent_count: 0, recent: [] })
+            onCopyCitekey: (citekey) => shell.sendRefCopy(citekey)
+        }
+    }
+
+    // ----------------------------------------------------------------------
+    // Project pulse / deadline overlay (§2.9.4, §2.9.12).
+    // ----------------------------------------------------------------------
+    PanelWindow {
+        id: projectPulseWindow
+
+        property bool isClosing: false
+        visible: shell.projectPulseOpen || isClosing
+
+        Connections {
+            target: shell
+            function onProjectPulseOpenChanged() {
+                if (shell.projectPulseOpen) {
+                    projectPulseWindow.isClosing = false;
+                    projectPulseCloseTimer.stop();
+                } else if (projectPulseWindow.visible && !projectPulseWindow.isClosing) {
+                    projectPulseWindow.isClosing = true;
+                    projectPulseCloseTimer.restart();
+                }
+            }
+        }
+
+        Timer {
+            id: projectPulseCloseTimer
+            interval: Theme.motionSlow + 50
+            onTriggered: projectPulseWindow.isClosing = false
+        }
+
+        WlrLayershell.layer: WlrLayer.Overlay
+        WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+        WlrLayershell.namespace: "levshell-project-pulse"
+
+        BackgroundEffect.blurRegion: Region {
+            item: projectPulsePanel
+        }
+
+        anchors { top: true; left: true; right: true; bottom: true }
+        color: "transparent"
+
+        MouseArea {
+            anchors.fill: parent
+            onClicked: shell.projectPulseOpen = false
+        }
+
+        ProjectPulsePanel {
+            id: projectPulsePanel
+            anchors.right: parent.right
+            anchors.rightMargin: Theme.spaceLg
+            anchors.top: parent.top
+            anchors.topMargin: Theme.barHeight + Theme.spaceSm
+            isOpen: shell.projectPulseOpen
+            payload: shell.stateFor("project-pulse")
+                     || ({ active_today: 0, dormant: 0, projects: [], deadlines: [] })
+        }
+    }
+
+    // ----------------------------------------------------------------------
+    // arXiv new-papers overlay (§2.9.9).
+    // ----------------------------------------------------------------------
+    PanelWindow {
+        id: arxivWatchWindow
+
+        property bool isClosing: false
+        visible: shell.arxivWatchOpen || isClosing
+
+        Connections {
+            target: shell
+            function onArxivWatchOpenChanged() {
+                if (shell.arxivWatchOpen) {
+                    arxivWatchWindow.isClosing = false;
+                    arxivWatchCloseTimer.stop();
+                } else if (arxivWatchWindow.visible && !arxivWatchWindow.isClosing) {
+                    arxivWatchWindow.isClosing = true;
+                    arxivWatchCloseTimer.restart();
+                }
+            }
+        }
+
+        Timer {
+            id: arxivWatchCloseTimer
+            interval: Theme.motionSlow + 50
+            onTriggered: arxivWatchWindow.isClosing = false
+        }
+
+        WlrLayershell.layer: WlrLayer.Overlay
+        WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+        WlrLayershell.namespace: "levshell-arxiv-watch"
+
+        BackgroundEffect.blurRegion: Region {
+            item: arxivWatchPanel
+        }
+
+        anchors { top: true; left: true; right: true; bottom: true }
+        color: "transparent"
+
+        MouseArea {
+            anchors.fill: parent
+            onClicked: shell.arxivWatchOpen = false
+        }
+
+        ArxivWatchPanel {
+            id: arxivWatchPanel
+            anchors.right: parent.right
+            anchors.rightMargin: Theme.spaceLg
+            anchors.top: parent.top
+            anchors.topMargin: Theme.barHeight + Theme.spaceSm
+            isOpen: shell.arxivWatchOpen
+            payload: shell.stateFor("arxiv-watch") || ({ new_count: 0, items: [] })
+            onOpenPaper: (url) => shell.sendArxivOpen(url)
         }
     }
 
