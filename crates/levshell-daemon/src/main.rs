@@ -29,7 +29,8 @@ use levshell_modules::{
 use levshell_sync::{
     AnkiConnectAdapter, AnkiConnectConfig, AnkiConnectConfigWatcher, CalDavAdapter, CalDavConfig,
     CalDavConfigWatcher, MlflowAdapter, MlflowConfig, ObsidianAdapter, ObsidianConfig,
-    ObsidianConfigWatcher, SyncAdapter, ZoteroAdapter, ZoteroConfig, ZoteroConfigWatcher,
+    ObsidianConfigWatcher, SyncAdapter, WandbAdapter, WandbConfig, ZoteroAdapter, ZoteroConfig,
+    ZoteroConfigWatcher,
 };
 
 #[tokio::main]
@@ -598,12 +599,44 @@ async fn main() -> Result<()> {
         }
     });
 
+    // Weights & Biases experiment-tracker adapter (spec §5.1.2). Sibling
+    // of the MLflow adapter; same no-hot-reload posture, missing
+    // wandb.toml is the common case.
+    let wandb_adapter = sync_dir.as_deref().and_then(|dir| {
+        let path = dir.join("wandb.toml");
+        if !path.exists() {
+            tracing::debug!(path = %path.display(), "no wandb.toml found");
+            return None;
+        }
+        match WandbConfig::load_from(&path) {
+            Ok(cfg) => {
+                tracing::info!(
+                    base_url = %cfg.base_url,
+                    entity = %cfg.entity,
+                    project = %cfg.project,
+                    enabled = cfg.enabled,
+                    "registering wandb sync adapter"
+                );
+                Some(Arc::new(WandbAdapter::new(cfg)))
+            }
+            Err(e) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "failed to load wandb.toml; skipping adapter"
+                );
+                None
+            }
+        }
+    });
+
     let sync_factory: SyncAdapterFactory = {
         let obsidian = obsidian_adapter.clone();
         let zotero = zotero_adapter.clone();
         let anki = ankiconnect_adapter.clone();
         let caldav = caldav_adapter.clone();
         let mlflow = mlflow_adapter.clone();
+        let wandb = wandb_adapter.clone();
         Box::new(move || {
             let mut adapters: Vec<Arc<dyn SyncAdapter>> = Vec::new();
             if let Some(a) = obsidian {
@@ -619,6 +652,9 @@ async fn main() -> Result<()> {
                 adapters.push(a);
             }
             if let Some(a) = mlflow {
+                adapters.push(a);
+            }
+            if let Some(a) = wandb {
                 adapters.push(a);
             }
             adapters
