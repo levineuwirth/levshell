@@ -16,6 +16,7 @@
 
 pub mod app_launcher;
 pub mod calc;
+pub mod links;
 pub mod module;
 pub mod note_search;
 pub mod provider;
@@ -26,6 +27,7 @@ pub mod workspace_switcher;
 
 pub use app_launcher::AppLauncherProvider;
 pub use calc::CalcProvider;
+pub use links::{LinksProvider, LINKS_PROVIDER};
 pub use module::{PaletteModule, PALETTE_WIDGET_ID, PALETTE_WIDGET_TYPE};
 pub use note_search::NoteSearchProvider;
 pub use provider::{merge_results, PaletteItem, PaletteProvider, PaletteState};
@@ -64,7 +66,8 @@ pub fn default_palette_providers(store: DataStore) -> Vec<Box<dyn PaletteProvide
         Box::new(AppLauncherProvider::new()),
         Box::new(WorkspaceSwitcherProvider::new()),
         Box::new(NoteSearchProvider::new(store.clone())),
-        Box::new(RefSearchProvider::new(store)),
+        Box::new(RefSearchProvider::new(store.clone())),
+        Box::new(LinksProvider::new(store)),
         Box::new(CalcProvider::new()),
         Box::new(UnicodeProvider::new()),
         Box::new(RecentDocsProvider::new()),
