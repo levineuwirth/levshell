@@ -42,6 +42,10 @@ pub const DEFAULT_THEME_NAME: &str = "warm-dark";
 #[derive(Debug)]
 struct Inner {
     active: Option<ThemeFile>,
+    /// Stem the active theme was loaded by (the `<name>.toml` id, not
+    /// the display `meta.name`). Pair fields reference stems, so
+    /// `toggle_mode` needs this to detect a self-pair.
+    active_name: Option<String>,
     publisher: Option<WidgetPublisher>,
     /// Presentation mode (spec §2.18) — muted non-critical surfaces.
     presentation: bool,
@@ -64,6 +68,7 @@ impl ThemeService {
         Self {
             inner: Mutex::new(Inner {
                 active: None,
+                active_name: None,
                 publisher: None,
                 presentation: false,
             }),
@@ -134,6 +139,7 @@ impl ThemeService {
         let publisher = {
             let mut guard = self.inner.lock().expect("theme service lock poisoned");
             guard.active = Some(theme);
+            guard.active_name = Some(name.to_owned());
             guard.publisher.clone()
         };
         if let Some(p) = publisher {
@@ -175,24 +181,33 @@ impl ThemeService {
     /// error when there's no active theme or the current one
     /// doesn't declare a `light_pair` / `dark_pair`.
     pub fn toggle_mode(&self) -> Result<ThemeSnapshot, String> {
-        let pair_name = {
+        let (pair_name, current) = {
             let guard = self.inner.lock().expect("theme service lock poisoned");
             let Some(active) = guard.active.as_ref() else {
                 return Err("no active theme to toggle from".into());
             };
-            match active.meta.variant.as_str() {
+            let pair = match active.meta.variant.as_str() {
                 "dark" => active.meta.light_pair.clone(),
                 "light" => active.meta.dark_pair.clone(),
                 other => {
                     return Err(format!("active theme has invalid variant {other:?}"));
                 }
-            }
+            };
+            (pair, guard.active_name.clone())
         };
         let Some(pair) = pair_name else {
             return Err(
                 "active theme does not declare a light_pair / dark_pair to toggle to".into(),
             );
         };
+        // A theme naming itself as its own pair would just re-activate
+        // the same theme (no variant change). Reject it loudly rather
+        // than silently no-op.
+        if current.as_deref() == Some(pair.as_str()) {
+            return Err(format!(
+                "active theme's pair points at itself ({pair:?}) — not a light/dark toggle"
+            ));
+        }
         self.activate(&pair)
     }
 
@@ -534,6 +549,47 @@ primary = "#EEEEEE"
         let after = s.toggle_mode().unwrap();
         assert_eq!(after.name, "Paired Light");
         assert_eq!(after.variant, "light");
+    }
+
+    #[test]
+    fn toggle_mode_self_pair_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("loopy.toml"),
+            r##"
+[meta]
+name = "Loopy"
+variant = "dark"
+light_pair = "loopy"
+
+[colors]
+"##,
+        )
+        .unwrap();
+        let s = ThemeService::new(Some(dir.path().to_path_buf()), EventBus::new())
+            .with_propagation(false);
+        s.activate("loopy").unwrap();
+        let err = s.toggle_mode().unwrap_err();
+        assert!(err.contains("itself"), "got: {err}");
+    }
+
+    #[test]
+    fn bundled_neutral_pair_toggles_both_ways() {
+        // The shipped neutral-dark ↔ neutral-light pairing, end to end
+        // through the real BUILTIN_THEMES files.
+        let dir = tempfile::tempdir().unwrap();
+        levshell_config::bootstrap_themes(dir.path(), false).unwrap();
+        let s = ThemeService::new(Some(dir.path().to_path_buf()), EventBus::new())
+            .with_propagation(false);
+
+        let nd = s.activate("neutral-dark").unwrap();
+        assert_eq!(nd.variant, "dark");
+        let nl = s.toggle_mode().unwrap();
+        assert_eq!(nl.name, "Neutral Light");
+        assert_eq!(nl.variant, "light");
+        let back = s.toggle_mode().unwrap();
+        assert_eq!(back.name, "Neutral Dark");
+        assert_eq!(back.variant, "dark");
     }
 
     #[test]

@@ -1,0 +1,58 @@
+# Levshell built-in theme — neutral light.
+#
+# The light counterpart of neutral-dark: spec §3.6 wants light mode
+# hand-authored (not algorithmically derived). Surfaces are a true-gray
+# luminance hierarchy with no hue bias (mirroring neutral-dark, inverted
+# like warm-light mirrors warm-dark). Accent hues are preserved but
+# darkened for legibility on the light surface — the same darkened
+# accent set warm-light uses, since neutral-dark reuses warm-dark's
+# accents (the neutrality lives in the surfaces, not the accents).
+#
+# `dark_pair` lets `levshell-ctl theme toggle-mode` swap back to
+# neutral-dark in one command.
+
+[meta]
+name = "Neutral Light"
+author = "Levshell"
+variant = "light"
+dark_pair = "neutral-dark"
+
+[colors]
+# 4-tier surface hierarchy — inverted luminance, pure gray (no tint).
+bg             = "#F5F5F5"
+bg_dark        = "#ECECEC"
+surface        = "#E8E8E8"
+surface_raised = "#DEDEDE"
+overlay        = "#CFCFCF"
+
+fg          = "#2A2A2A"
+fg_muted    = "#6E6E6E"
+fg_subtle   = "#909090"
+on_primary  = "#F5F5F5"
+on_surface  = "#2A2A2A"
+outline     = "#CFCFCF"
+
+# Accent hues preserved; darkened to stay legible on light surfaces —
+# identical to warm-light, since neutral-dark shares warm-dark's accents.
+primary           = "#4C6FBC"
+primary_variant   = "#3A57A0"
+secondary         = "#8B6CC5"
+secondary_variant = "#6E52A8"
+tertiary          = "#4A9DCB"
+
+success = "#5F8C3A"
+warning = "#B3832C"
+error   = "#C44E65"
+info    = "#1E8BA3"
+
+[health]
+stale_pill = "#909090"
+error_pill = "#9A6650"
+
+[bar]
+opacity             = 0.85
+blur_radius         = 30
+opacity_battery     = 1.0
+blur_radius_battery = 0
+height_full         = 44
+height_compact      = 32

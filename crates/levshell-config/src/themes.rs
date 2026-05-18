@@ -220,6 +220,10 @@ pub const BUILTIN_THEMES: &[(&str, &str)] = &[
         "warm-light",
         include_str!("../../../config/themes/warm-light.toml"),
     ),
+    (
+        "neutral-light",
+        include_str!("../../../config/themes/neutral-light.toml"),
+    ),
 ];
 
 #[derive(Debug, Clone)]
