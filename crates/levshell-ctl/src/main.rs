@@ -13,7 +13,8 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use levshell_ipc::{
     default_socket_path, BarDensity, ClientRole, ContextSnapshotAction, CtlRequest, CtlResponse,
-    DuckAction, Hello, IpcConnection, JsonCodec, NotifyUrgency, PaletteAction, ProfileAction,
+    DataAction, DuckAction, Hello, IpcConnection, JsonCodec, NotifyUrgency, PaletteAction,
+    ProfileAction,
     ThemeAction, TimerAction, WarmupAction,
 };
 use tokio::net::UnixStream;
@@ -103,6 +104,13 @@ enum Command {
         action: ContextCmd,
     },
 
+    /// Export the whole data store to a portable JSON snapshot, or
+    /// restore one into an empty store (durability — spec §5.1).
+    Data {
+        #[command(subcommand)]
+        action: DataCmd,
+    },
+
     /// Open / close / reset the rubber-duck debugger overlay
     /// (spec §2.12.6). A minimal chat interface to a local LLM for
     /// articulating stuck points.
@@ -172,6 +180,33 @@ impl From<CliUrgency> for NotifyUrgency {
 /// are JSON-string-escaped; a param with no `=` maps to an empty string.
 /// ctl stays serde_json-free by design, so this is a tiny hand-roller —
 /// the daemon validates the result and rejects anything malformed.
+/// Default export filename in the current directory. Unix-timestamp
+/// suffix keeps successive exports from clobbering each other without
+/// needing a date-format dependency.
+fn default_export_path() -> PathBuf {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    PathBuf::from(format!("levshell-export-{ts}.json"))
+}
+
+/// Resolve `p` to an absolute path string. The *daemon* opens this
+/// path, possibly from a different working directory, so a bare
+/// `backup.json` must mean "where the user ran ctl", not "wherever the
+/// daemon happens to be". Best-effort: if the cwd is unreadable, fall
+/// back to the path as given rather than failing the command.
+fn abs_path(p: PathBuf) -> String {
+    let abs = if p.is_absolute() {
+        p
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(&p))
+            .unwrap_or(p)
+    };
+    abs.to_string_lossy().into_owned()
+}
+
 fn params_to_json(params: &[String]) -> String {
     fn esc(s: &str) -> String {
         let mut out = String::with_capacity(s.len() + 2);
@@ -231,6 +266,23 @@ enum DuckCmd {
     Close,
     /// Clear the conversation and close the overlay.
     Reset,
+}
+
+#[derive(Debug, Subcommand)]
+enum DataCmd {
+    /// Write a JSON snapshot of every record to `[path]`
+    /// (default: `./levshell-export-<unix-ts>.json`).
+    Export {
+        /// Output file. Relative paths resolve against the directory
+        /// you run `levshell-ctl` from.
+        path: Option<PathBuf>,
+    },
+    /// Restore a snapshot into an empty store. Refuses if the store
+    /// already has data — restore is not a merge.
+    Import {
+        /// Snapshot file to read.
+        path: PathBuf,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -508,6 +560,16 @@ fn build_request(cmd: Command) -> CtlRequest {
         Command::Warmup { action } => match action {
             WarmupCmd::Open => CtlRequest::Warmup {
                 action: WarmupAction::Open,
+            },
+        },
+        Command::Data { action } => match action {
+            DataCmd::Export { path } => CtlRequest::Data {
+                action: DataAction::Export,
+                path: abs_path(path.unwrap_or_else(default_export_path)),
+            },
+            DataCmd::Import { path } => CtlRequest::Data {
+                action: DataAction::Import,
+                path: abs_path(path),
             },
         },
         Command::Context { action } => match action {

@@ -23,7 +23,7 @@ pub use models::{
     TaskPriority, TaskStatus,
 };
 pub use ops::{
-    NoteSearchHit, RelatedEntity, RelationDirection, ReferenceSearchHit,
-    SCAFFOLD_RELATION_KIND,
+    ImportReport, NoteSearchHit, RelatedEntity, RelationDirection, ReferenceSearchHit, RowMap,
+    StoreExport, SCAFFOLD_RELATION_KIND, EXPORT_VERSION,
 };
 pub use store::DataStore;
