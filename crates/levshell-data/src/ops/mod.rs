@@ -11,6 +11,7 @@
 mod events;
 mod experiments;
 mod flashcards;
+mod graph;
 mod notes;
 mod projects;
 mod refs;
@@ -20,6 +21,8 @@ mod search;
 mod sync_metadata;
 mod tags;
 mod tasks;
+
+pub use graph::{RelatedEntity, RelationDirection};
 
 pub use scaffold::SCAFFOLD_RELATION_KIND;
 

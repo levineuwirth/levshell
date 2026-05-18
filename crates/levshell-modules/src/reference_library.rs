@@ -21,7 +21,7 @@ use std::time::Duration as StdDuration;
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use levshell_core::{Event, EventKind, Module, ModuleResult, WidgetDescriptor};
-use levshell_data::{DataStore, ListReferences};
+use levshell_data::{DataStore, EntityType, ListReferences};
 use levshell_ipc::{DaemonMessage, WidgetPublisher, WidgetStatus, WidgetUpdate};
 
 pub const REF_LIBRARY_WIDGET_ID: &str = "reference-library";
@@ -75,17 +75,46 @@ impl ReferenceLibraryModule {
         let recent_count = refs.iter().filter(|r| r.created_at >= cutoff).count();
         // list_references is ORDER BY updated_at DESC, so the head is
         // the most recently touched.
-        let recent: Vec<serde_json::Value> = refs
-            .iter()
-            .take(RECENT)
-            .map(|r| {
-                serde_json::json!({
-                    "title": r.title,
-                    "citekey": r.citekey,
-                    "year": r.year,
-                })
-            })
-            .collect();
+        // Surface the relation graph where references live (spec
+        // §5.1.1): a paper's scaffolded literature note(s) and any
+        // note that wiki-links to it. This is the connective tissue
+        // the unified model exists for — invisible until now.
+        let mut recent: Vec<serde_json::Value> = Vec::with_capacity(RECENT.min(refs.len()));
+        for r in refs.iter().take(RECENT) {
+            let linked_notes = match self
+                .store
+                .related_entities(r.id, EntityType::Reference)
+                .await
+            {
+                // Count *distinct* notes, not edges: a note linked to
+                // this paper by both a `scaffolded_from` edge (M4
+                // scaffolding) and a `wiki_link` edge (Obsidian sync) —
+                // the common scaffolded-note case — is one note, not
+                // two. `related_entities` returns one row per edge, so
+                // dedup on the note id before counting.
+                Ok(edges) => {
+                    let mut ids: Vec<_> = edges
+                        .iter()
+                        .filter(|e| e.entity_type == EntityType::Note)
+                        .map(|e| e.entity_id)
+                        .collect();
+                    ids.sort_unstable();
+                    ids.dedup();
+                    ids.len()
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, ref_id = %r.id,
+                        "reference-library: related_entities failed; 0 linked");
+                    0
+                }
+            };
+            recent.push(serde_json::json!({
+                "title": r.title,
+                "citekey": r.citekey,
+                "year": r.year,
+                "linked_notes": linked_notes,
+            }));
+        }
 
         let update = WidgetUpdate {
             widget_id: REF_LIBRARY_WIDGET_ID.into(),
@@ -211,6 +240,99 @@ mod tests {
         // a (None) + b (0.0) are unread; c (0.8) is not.
         assert_eq!(v["state"]["unread"], 2);
         assert_eq!(v["state"]["recent"].as_array().unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn recent_surfaces_linked_note_count() {
+        use levshell_data::{EntityType, NewNote};
+
+        let s = DataStore::open_in_memory().await.unwrap();
+        let r = s.insert_reference(newref("vaswani2017", None)).await.unwrap();
+        let note = s
+            .insert_note(NewNote {
+                title: "Literature notes — Attention".into(),
+                content: "x".into(),
+                project_id: None,
+            })
+            .await
+            .unwrap();
+        s.add_relation(
+            note.id,
+            EntityType::Note,
+            r.id,
+            EntityType::Reference,
+            "scaffolded_from",
+        )
+        .await
+        .unwrap();
+
+        let (a, b) = duplex(8192);
+        let w = IpcWriter::from_parts(a, JsonCodec);
+        let task = spawn_writer_task(w, 16);
+        let m = ReferenceLibraryModule::new(s, task.publisher);
+        m.refresh().await;
+
+        use tokio::io::AsyncReadExt;
+        let mut buf = vec![0u8; 4096];
+        let n = b.take(4096).read(&mut buf).await.unwrap();
+        let line = std::str::from_utf8(&buf[..n]).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(line.lines().next().unwrap()).unwrap();
+        let recent = v["state"]["recent"].as_array().unwrap();
+        assert_eq!(recent[0]["citekey"], "vaswani2017");
+        assert_eq!(
+            recent[0]["linked_notes"], 1,
+            "the scaffolded note must show as a linked note"
+        );
+    }
+
+    #[tokio::test]
+    async fn linked_note_count_dedups_multi_edge_notes() {
+        // A note tied to a paper by *both* a scaffolded_from edge and a
+        // wiki_link edge (the common scaffolded-note + Obsidian-vault
+        // case) is one note. Counting edges would report 2; the cue
+        // must report distinct notes.
+        use levshell_data::{EntityType, NewNote};
+
+        let s = DataStore::open_in_memory().await.unwrap();
+        let r = s.insert_reference(newref("vaswani2017", None)).await.unwrap();
+        let note = s
+            .insert_note(NewNote {
+                title: "Literature notes — Attention".into(),
+                content: "x".into(),
+                project_id: None,
+            })
+            .await
+            .unwrap();
+        for kind in ["scaffolded_from", "wiki_link"] {
+            s.add_relation(
+                note.id,
+                EntityType::Note,
+                r.id,
+                EntityType::Reference,
+                kind,
+            )
+            .await
+            .unwrap();
+        }
+
+        let (a, b) = duplex(8192);
+        let w = IpcWriter::from_parts(a, JsonCodec);
+        let task = spawn_writer_task(w, 16);
+        let m = ReferenceLibraryModule::new(s, task.publisher);
+        m.refresh().await;
+
+        use tokio::io::AsyncReadExt;
+        let mut buf = vec![0u8; 4096];
+        let n = b.take(4096).read(&mut buf).await.unwrap();
+        let line = std::str::from_utf8(&buf[..n]).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(line.lines().next().unwrap()).unwrap();
+        let recent = v["state"]["recent"].as_array().unwrap();
+        assert_eq!(
+            recent[0]["linked_notes"], 1,
+            "two edges to the same note count as one linked note"
+        );
     }
 
     #[tokio::test]

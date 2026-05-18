@@ -5,7 +5,8 @@
 // `@citekey` (routed as a `reference-library copy` widget action).
 //
 // payload == reference_library state:
-//   { total, unread, recent_count, recent: [{title, citekey, year}] }
+//   { total, unread, recent_count,
+//     recent: [{title, citekey, year, linked_notes}] }
 
 import QtQuick
 import QtQuick.Effects
@@ -129,8 +130,17 @@ Rectangle {
                         Text {
                             width: parent.width
                             elide: Text.ElideRight
+                            // §5.1.1 connective tissue: how many notes
+                            // (scaffolded lit notes + wiki-links) point
+                            // at this paper. Silent when zero so an
+                            // un-annotated library stays calm.
                             text: "@" + rrow.modelData.citekey
                                   + (rrow.modelData.year ? "  ·  " + rrow.modelData.year : "")
+                                  + ((rrow.modelData.linked_notes || 0) > 0
+                                     ? "  ·  " + rrow.modelData.linked_notes
+                                       + (rrow.modelData.linked_notes === 1
+                                          ? " linked note" : " linked notes")
+                                     : "")
                             color: Theme.fgMuted
                             font.family: Theme.fontMono
                             font.pixelSize: Theme.typeCaption
