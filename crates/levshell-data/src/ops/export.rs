@@ -181,11 +181,56 @@ fn blob_columns(conn: &Connection, table: &str) -> Result<HashSet<String>> {
     Ok(set)
 }
 
+/// User tables physically present in the schema, excluding SQLite
+/// internals (`sqlite_%`) and the FTS5 shadow tables (`%_fts%`, rebuilt
+/// by triggers and never exported).
+fn live_user_tables(conn: &Connection) -> Result<HashSet<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT name FROM sqlite_master \
+         WHERE type = 'table' \
+           AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' \
+           AND name NOT LIKE '%\\_fts%' ESCAPE '\\'",
+    )?;
+    let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+    let mut set = HashSet::new();
+    for r in rows {
+        set.insert(r?);
+    }
+    Ok(set)
+}
+
+/// Fail loudly if the curated [`TABLES`] list no longer covers the live
+/// schema. `TABLES` is hand-ordered for FK-safe insert, so it can't be
+/// `sqlite_master`-driven — but a future migration that adds a table
+/// must not silently produce an incomplete backup (or, on import, leave
+/// the new table's emptiness unchecked). This converts that latent data
+/// loss into an immediate, actionable error: bump [`EXPORT_VERSION`]
+/// and add the table to `TABLES` in FK order.
+fn assert_table_list_covers_schema(conn: &Connection) -> Result<()> {
+    let known: HashSet<&str> = TABLES.iter().copied().collect();
+    let mut missing: Vec<String> = live_user_tables(conn)?
+        .into_iter()
+        .filter(|t| !known.contains(t.as_str()))
+        .collect();
+    if !missing.is_empty() {
+        missing.sort();
+        return Err(DataError::Export(format!(
+            "snapshot table list is stale: schema has table(s) {missing:?} not \
+             in TABLES — refusing to {} an incomplete backup (add them to \
+             TABLES in FK-safe order and bump EXPORT_VERSION)",
+            "produce/restore against"
+        )));
+    }
+    Ok(())
+}
+
 impl DataStore {
     /// Capture every persistent row into a portable [`StoreExport`].
     /// Read-only; safe to call on a live store.
     pub async fn export_all(&self) -> Result<StoreExport> {
         self.with_conn(move |conn| {
+            // A new migration must fail here, not silently omit a table.
+            assert_table_list_covers_schema(conn)?;
             let mut tables: BTreeMap<String, Vec<RowMap>> = BTreeMap::new();
             for &table in TABLES {
                 let mut stmt = conn.prepare(&format!("SELECT * FROM {table}"))?;
@@ -223,7 +268,27 @@ impl DataStore {
                 )));
             }
 
+            // Don't silently drop a table the snapshot carries but this
+            // binary doesn't know — that is exactly the data loss this
+            // feature exists to prevent. (The version gate above should
+            // already catch this; this is defence in depth and a clear
+            // diagnostic.)
+            for name in export.tables.keys() {
+                if !TABLES.contains(&name.as_str()) {
+                    return Err(DataError::Export(format!(
+                        "snapshot contains unknown table {name:?}: this binary's \
+                         schema predates the snapshot — refusing to restore \
+                         (would silently discard {name:?})"
+                    )));
+                }
+            }
+
             let tx = conn.transaction()?;
+
+            // The emptiness guard below iterates TABLES; assert it
+            // covers the live schema so a future table can't slip a
+            // populated store past the "restore targets empty" check.
+            assert_table_list_covers_schema(&tx)?;
 
             // Restore-only: never half-overwrite or silently merge.
             for &table in TABLES {
@@ -379,5 +444,46 @@ mod tests {
         let dst = DataStore::open_in_memory().await.unwrap();
         let err = dst.import_all(snap).await.unwrap_err();
         assert!(matches!(err, DataError::Export(m) if m.contains("version")));
+    }
+
+    #[tokio::test]
+    async fn import_rejects_snapshot_with_unknown_table() {
+        // A snapshot from a future schema must not silently drop the
+        // table this binary doesn't know — it must error.
+        let dst = DataStore::open_in_memory().await.unwrap();
+        let mut tables: BTreeMap<String, Vec<RowMap>> = BTreeMap::new();
+        let mut row = RowMap::new();
+        row.insert("id".into(), serde_json::json!("00"));
+        tables.insert("future_widgets".into(), vec![row]);
+        let snap = StoreExport {
+            version: EXPORT_VERSION,
+            exported_at: Utc::now(),
+            tables,
+        };
+        let err = dst.import_all(snap).await.unwrap_err();
+        assert!(
+            matches!(err, DataError::Export(ref m) if m.contains("unknown table")),
+            "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn export_fails_when_schema_has_unlisted_table() {
+        // Simulate a future migration adding a table TABLES doesn't
+        // list: a "successful" backup that silently omits it is exactly
+        // the failure mode this guard prevents.
+        let s = DataStore::open_in_memory().await.unwrap();
+        s.with_conn(|conn| {
+            conn.execute("CREATE TABLE future_widgets (id BLOB PRIMARY KEY)", [])?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+        let err = s.export_all().await.unwrap_err();
+        assert!(
+            matches!(err, DataError::Export(ref m)
+                if m.contains("stale") && m.contains("future_widgets")),
+            "got {err:?}"
+        );
     }
 }
