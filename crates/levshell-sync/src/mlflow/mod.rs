@@ -74,6 +74,26 @@ fn default_max_results() -> u32 {
     100
 }
 
+/// Hard ceiling for the configured request timeout. `timeout_secs` had a
+/// floor (`.max(1)`) but no upper bound, so a misconfigured large value
+/// would let a single request — including `probe()`, which gates the
+/// whole adapter loop — stall for that long with no defense-in-depth.
+const MAX_TIMEOUT_SECS: u64 = 120;
+
+/// Reject a response whose declared length exceeds this. MLflow is
+/// usually localhost and `max_results` is config-bounded, but reqwest
+/// has no default body cap, so a misbehaving server could OOM the
+/// daemon. Guards the known-`Content-Length` case (a chunked response
+/// without a length is the residual, accepted at this severity).
+const MAX_BODY_BYTES: u64 = 32 * 1024 * 1024;
+
+impl MlflowConfig {
+    /// Configured request timeout, clamped to `[1, MAX_TIMEOUT_SECS]`.
+    fn effective_timeout(&self) -> Duration {
+        Duration::from_secs(self.timeout_secs.clamp(1, MAX_TIMEOUT_SECS))
+    }
+}
+
 impl MlflowConfig {
     pub fn load_from(path: &Path) -> std::result::Result<Self, MlflowConfigError> {
         let text = std::fs::read_to_string(path).map_err(|e| MlflowConfigError::Io {
@@ -184,7 +204,7 @@ pub struct MlflowAdapter {
 impl MlflowAdapter {
     pub fn new(config: MlflowConfig) -> Self {
         let http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(config.timeout_secs.max(1)))
+            .timeout(config.effective_timeout())
             .build()
             .unwrap_or_default();
         Self { config, http }
@@ -214,6 +234,13 @@ impl MlflowAdapter {
                 resp.status()
             )));
         }
+        if let Some(len) = resp.content_length() {
+            if len > MAX_BODY_BYTES {
+                return Err(SyncError::Unavailable(format!(
+                    "mlflow response too large: {len} bytes (cap {MAX_BODY_BYTES})"
+                )));
+            }
+        }
         let parsed: SearchResponse = resp
             .json()
             .await
@@ -237,7 +264,7 @@ impl SyncAdapter for MlflowAdapter {
     }
 
     fn timeout(&self) -> Duration {
-        Duration::from_secs(self.config.timeout_secs.max(1))
+        self.config.effective_timeout()
     }
 
     async fn probe(&self, _ctx: &SyncContext) -> SyncStatus {

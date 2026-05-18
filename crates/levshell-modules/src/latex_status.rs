@@ -90,7 +90,10 @@ impl LatexStatusModule {
             let Some(pid) = name.to_str().and_then(|s| s.parse::<i32>().ok()) else {
                 continue;
             };
-            if ENGINES.iter().any(|e| Self::proc_comm(pid) == *e) {
+            // Read `comm` exactly once per PID (was re-read per engine
+            // name → up to ENGINES.len() syscalls per process per tick).
+            let comm = Self::proc_comm(pid);
+            if ENGINES.iter().any(|e| comm == *e) {
                 let cwd = std::fs::read_link(format!("/proc/{pid}/cwd"))
                     .unwrap_or_else(|_| PathBuf::from("."));
                 return Some((pid, cwd));
@@ -142,8 +145,36 @@ impl LatexStatusModule {
         }
     }
 
-    fn poll(&mut self) {
+    /// Blocking `/proc` + log scan. Runs on a `spawn_blocking` thread so
+    /// the synchronous `std::fs` walk (a full `/proc` enumeration plus a
+    /// `comm` read per process every tick, and a possibly-large `.log`
+    /// read) never stalls a tokio runtime worker. `prev` is the tracked
+    /// engine at tick start; if no engine is running now but one was, the
+    /// just-finished build's newest log is inspected here too.
+    fn probe(prev: Option<(i32, PathBuf)>) -> Probe {
         match Self::find_engine() {
+            Some(e) => Probe {
+                engine: Some(e),
+                finished: None,
+            },
+            None => {
+                let finished = prev.map(|(_, cwd)| {
+                    let log = Self::newest_log(&cwd);
+                    let error = log.as_ref().and_then(Self::first_error);
+                    (log, error)
+                });
+                Probe {
+                    engine: None,
+                    finished,
+                }
+            }
+        }
+    }
+
+    /// Apply a [`Probe`] to the module state. Pure (no I/O) — the
+    /// blocking work already happened in [`Self::probe`].
+    fn apply(&mut self, probe: Probe) {
+        match probe.engine {
             Some((pid, cwd)) => {
                 let already = self.tracked.as_ref().map(|(p, _)| *p) == Some(pid)
                     || self.phase == Phase::Compiling;
@@ -156,10 +187,10 @@ impl LatexStatusModule {
                 }
             }
             None => {
-                if let Some((_, cwd)) = self.tracked.take() {
-                    // Build just finished — inspect its log.
-                    let log = Self::newest_log(&cwd);
-                    self.error = log.as_ref().and_then(Self::first_error);
+                if self.tracked.take().is_some() {
+                    // Build just finished — use the probe's log inspection.
+                    let (log, error) = probe.finished.unwrap_or((None, None));
+                    self.error = error;
                     self.phase = if self.error.is_some() {
                         Phase::Error
                     } else {
@@ -182,6 +213,16 @@ impl LatexStatusModule {
             }
         }
     }
+}
+
+/// Result of the blocking `/proc` probe handed back to the async tick.
+#[derive(Default)]
+struct Probe {
+    /// A TeX engine currently running: `(pid, cwd)`.
+    engine: Option<(i32, PathBuf)>,
+    /// If no engine runs now but one was tracked, the finished build's
+    /// `(newest_log, first_error)`.
+    finished: Option<(Option<PathBuf>, Option<String>)>,
 }
 
 #[async_trait]
@@ -229,7 +270,13 @@ impl Module for LatexStatusModule {
     }
 
     async fn tick(&mut self) -> ModuleResult<()> {
-        self.poll();
+        // Offload the synchronous /proc + log scan so it can't stall a
+        // runtime worker (a join error → treat as a no-op tick).
+        let prev = self.tracked.clone();
+        let probe = tokio::task::spawn_blocking(move || Self::probe(prev))
+            .await
+            .unwrap_or_default();
+        self.apply(probe);
         Ok(())
     }
 }

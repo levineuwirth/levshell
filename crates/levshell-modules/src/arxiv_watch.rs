@@ -17,7 +17,7 @@
 //!
 //! State: `{ new_count, items: [{title, summary, url, published}] }`.
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
 use std::time::Duration as StdDuration;
 
@@ -101,11 +101,55 @@ struct Paper {
     published: String,
 }
 
+/// Insertion-ordered, bounded set of acknowledged arXiv ids. Eviction
+/// is oldest-first on the *real* in-memory structure (not just the
+/// serialized copy), so the daemon's memory can't grow unbounded and a
+/// restart can't resurrect arbitrarily-dropped ids as "new".
+#[derive(Default)]
+struct SeenSet {
+    set: HashSet<String>,
+    order: VecDeque<String>,
+}
+
+impl SeenSet {
+    /// Rebuild from a persisted, oldest-first id list, re-applying the
+    /// cap (a longer-than-cap file is trimmed to the newest `MAX_SEEN`).
+    fn from_ordered(ids: impl IntoIterator<Item = String>) -> Self {
+        let mut s = Self::default();
+        for id in ids {
+            s.insert(id);
+        }
+        s
+    }
+
+    fn contains(&self, id: &str) -> bool {
+        self.set.contains(id)
+    }
+
+    /// Insert `id`, evicting the oldest entry when over capacity.
+    fn insert(&mut self, id: String) {
+        if !self.set.insert(id.clone()) {
+            return;
+        }
+        self.order.push_back(id);
+        while self.order.len() > MAX_SEEN {
+            if let Some(old) = self.order.pop_front() {
+                self.set.remove(&old);
+            }
+        }
+    }
+
+    /// Ids oldest-first, for serialization.
+    fn ordered(&self) -> &VecDeque<String> {
+        &self.order
+    }
+}
+
 pub struct ArxivWatchModule {
     cfg: ArxivConfig,
     http: reqwest::Client,
     publisher: WidgetPublisher,
-    seen: HashSet<String>,
+    seen: SeenSet,
     seen_path: PathBuf,
     /// The new papers from the last poll, retained so the dropdown keeps
     /// showing them until the next poll.
@@ -118,7 +162,7 @@ impl ArxivWatchModule {
         let seen = std::fs::read_to_string(&seen_path)
             .ok()
             .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
-            .map(|v| v.into_iter().collect())
+            .map(SeenSet::from_ordered)
             .unwrap_or_default();
         let http = reqwest::Client::builder()
             .timeout(StdDuration::from_secs(20))
@@ -136,16 +180,12 @@ impl ArxivWatchModule {
     }
 
     fn persist_seen(&self) {
-        // Keep the set bounded — oldest membership is irrelevant once a
-        // paper has been acknowledged once.
-        let mut v: Vec<&String> = self.seen.iter().collect();
-        if v.len() > MAX_SEEN {
-            v.drain(0..v.len() - MAX_SEEN);
-        }
+        // The set is already bounded oldest-first in memory; persist it
+        // in that same order so a restart preserves recency.
         if let Some(parent) = self.seen_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        if let Ok(json) = serde_json::to_string(&v) {
+        if let Ok(json) = serde_json::to_string(self.seen.ordered()) {
             let _ = std::fs::write(&self.seen_path, json);
         }
     }
