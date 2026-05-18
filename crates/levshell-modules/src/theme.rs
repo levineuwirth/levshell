@@ -27,8 +27,8 @@ use levshell_config::{
 };
 use levshell_core::{Event, EventBus};
 use levshell_ipc::{
-    DaemonMessage, ThemeBar, ThemeColors, ThemeHealth, ThemeIcons, ThemePayload, ThemeSnapshot,
-    ThemeTypography, WidgetPublisher,
+    DaemonMessage, PresentationMode, ThemeBar, ThemeColors, ThemeHealth, ThemeIcons, ThemePayload,
+    ThemeSnapshot, ThemeTypography, WidgetPublisher,
 };
 
 pub const MODULE_NAME: &str = "theme";
@@ -43,6 +43,8 @@ pub const DEFAULT_THEME_NAME: &str = "warm-dark";
 struct Inner {
     active: Option<ThemeFile>,
     publisher: Option<WidgetPublisher>,
+    /// Presentation mode (spec §2.18) — muted non-critical surfaces.
+    presentation: bool,
 }
 
 /// Shared service. Cheap to clone via `Arc`.
@@ -50,6 +52,11 @@ pub struct ThemeService {
     inner: Mutex<Inner>,
     themes_dir: Option<PathBuf>,
     bus: EventBus,
+    /// When true, `activate` also pushes the palette to Sway
+    /// (`client.focused` colours) and the GTK/Qt portal
+    /// (`color-scheme`). Off in unit tests so they don't spawn
+    /// `swaymsg`/`gsettings`.
+    propagate: bool,
 }
 
 impl ThemeService {
@@ -58,10 +65,19 @@ impl ThemeService {
             inner: Mutex::new(Inner {
                 active: None,
                 publisher: None,
+                presentation: false,
             }),
             themes_dir,
             bus,
+            propagate: true,
         }
+    }
+
+    /// Disable Sway/GTK propagation (tests). Production keeps the
+    /// default `true`.
+    pub fn with_propagation(mut self, on: bool) -> Self {
+        self.propagate = on;
+        self
     }
 
     /// Bind the shell's per-connection [`WidgetPublisher`]. Called
@@ -135,6 +151,18 @@ impl ThemeService {
             name: snapshot.name.clone(),
             variant: snapshot.variant.clone(),
         });
+
+        // Propagate to the compositor and the GTK/Qt portal so the
+        // whole desktop tracks the bar (spec §2.18). Fail-soft: a
+        // missing `swaymsg`/`gsettings` is logged, never fatal — the
+        // bar itself is already themed via the IPC payload above.
+        if self.propagate {
+            let guard = self.inner.lock().expect("theme service lock poisoned");
+            if let Some(theme) = guard.active.as_ref() {
+                propagate_to_desktop(theme);
+            }
+        }
+
         tracing::info!(
             theme = %snapshot.name,
             variant = %snapshot.variant,
@@ -166,6 +194,43 @@ impl ThemeService {
             );
         };
         self.activate(&pair)
+    }
+
+    /// Toggle / set presentation mode (spec §2.18). `arg` is `"on"`,
+    /// `"off"`, or `"toggle"` / `None` (flip). Pushes
+    /// [`DaemonMessage::PresentationMode`] to the shell so it hides the
+    /// nudge toast + overlays, and fires
+    /// [`Event::PresentationModeChanged`] so the notifications module
+    /// drops non-critical desktop notifications. Returns the new state.
+    pub fn set_presentation(&self, arg: Option<&str>) -> bool {
+        let (on, publisher) = {
+            let mut guard = self.inner.lock().expect("theme service lock poisoned");
+            let on = match arg {
+                Some("on") => true,
+                Some("off") => false,
+                _ => !guard.presentation, // "toggle" / None / unknown
+            };
+            guard.presentation = on;
+            (on, guard.publisher.clone())
+        };
+        if let Some(p) = publisher {
+            if let Err(e) =
+                p.try_send(DaemonMessage::PresentationMode(PresentationMode { on }))
+            {
+                tracing::warn!(error = %e, "theme: failed to push PresentationMode");
+            }
+        }
+        self.bus.publish(Event::PresentationModeChanged { on });
+        tracing::info!(on, "theme: presentation mode");
+        on
+    }
+
+    /// Current presentation-mode state.
+    pub fn presentation(&self) -> bool {
+        self.inner
+            .lock()
+            .expect("theme service lock poisoned")
+            .presentation
     }
 
     /// Activate [`DEFAULT_THEME_NAME`] if it parses, otherwise log
@@ -276,6 +341,58 @@ fn icons_to_wire(i: &IconTokens) -> ThemeIcons {
     }
 }
 
+/// Build the five colour args for Sway's `client.focused` rule
+/// (`border background text indicator child_border`) from the theme's
+/// palette. Returns `None` when the theme doesn't override the colours
+/// we need (`primary`, `fg`, and a background) — propagating partial
+/// colours would leave Sway in an inconsistent half-themed state, so we
+/// skip the compositor and let it keep its config default.
+pub fn sway_client_colors(c: &ColorTokens) -> Option<[String; 5]> {
+    let border = c.primary.clone()?;
+    let text = c.fg.clone()?;
+    let background = c.bg_dark.clone().or_else(|| c.bg.clone())?;
+    Some([
+        border.clone(),
+        background,
+        text,
+        border.clone(),
+        border,
+    ])
+}
+
+/// The `org.gnome.desktop.interface color-scheme` value for a theme
+/// variant. `xdg-desktop-portal` relays this to GTK4 *and* Qt6 apps, so
+/// one `gsettings` write covers both toolkits' light/dark preference.
+pub fn gtk_color_scheme(variant: &str) -> Option<&'static str> {
+    match variant {
+        "dark" => Some("prefer-dark"),
+        "light" => Some("prefer-light"),
+        _ => None,
+    }
+}
+
+/// Push the active theme to the compositor (Sway window colours) and
+/// the GTK/Qt portal (light/dark). Fire-and-forget — each spawn is
+/// detached and a missing binary is logged at debug, never propagated.
+fn propagate_to_desktop(theme: &ThemeFile) {
+    if let Some([b, bg, t, i, cb]) = sway_client_colors(&theme.colors) {
+        if let Err(e) = crate::palette::spawn_detached(
+            "swaymsg",
+            &["client.focused", &b, &bg, &t, &i, &cb],
+        ) {
+            tracing::debug!(error = %e, "theme: swaymsg propagation skipped");
+        }
+    }
+    if let Some(scheme) = gtk_color_scheme(&theme.meta.variant) {
+        if let Err(e) = crate::palette::spawn_detached(
+            "gsettings",
+            &["set", "org.gnome.desktop.interface", "color-scheme", scheme],
+        ) {
+            tracing::debug!(error = %e, "theme: gsettings propagation skipped");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -323,7 +440,8 @@ mod tests {
     #[test]
     fn activate_unknown_theme_surfaces_load_error() {
         let dir = tempfile::tempdir().unwrap();
-        let s = ThemeService::new(Some(dir.path().to_path_buf()), EventBus::new());
+        let s = ThemeService::new(Some(dir.path().to_path_buf()), EventBus::new())
+            .with_propagation(false);
         let err = s.activate("no-such-theme").unwrap_err();
         assert!(err.contains("no-such-theme") || err.contains("not found"));
     }
@@ -346,7 +464,7 @@ primary = "#7AA2F7"
 
         let bus = EventBus::new();
         let mut rx = bus.subscribe("t", [levshell_core::EventKind::ThemeActivated], 4);
-        let s = ThemeService::new(Some(dir.path().to_path_buf()), bus);
+        let s = ThemeService::new(Some(dir.path().to_path_buf()), bus).with_propagation(false);
         let snap = s.activate("tiny").unwrap();
         assert_eq!(snap.name, "Tiny");
         assert_eq!(snap.variant, "dark");
@@ -374,7 +492,8 @@ variant = "dark"
 "##,
         )
         .unwrap();
-        let s = ThemeService::new(Some(dir.path().to_path_buf()), EventBus::new());
+        let s = ThemeService::new(Some(dir.path().to_path_buf()), EventBus::new())
+            .with_propagation(false);
         s.activate("solo").unwrap();
         let err = s.toggle_mode().unwrap_err();
         assert!(err.contains("light_pair") || err.contains("dark_pair"));
@@ -409,11 +528,78 @@ primary = "#EEEEEE"
 "##,
         )
         .unwrap();
-        let s = ThemeService::new(Some(dir.path().to_path_buf()), EventBus::new());
+        let s = ThemeService::new(Some(dir.path().to_path_buf()), EventBus::new())
+            .with_propagation(false);
         s.activate("paired-dark").unwrap();
         let after = s.toggle_mode().unwrap();
         assert_eq!(after.name, "Paired Light");
         assert_eq!(after.variant, "light");
+    }
+
+    #[test]
+    fn sway_colors_need_primary_fg_and_bg() {
+        // Only primary set → not enough to theme Sway consistently.
+        let partial = ColorTokens {
+            primary: Some("#7AA2F7".into()),
+            ..Default::default()
+        };
+        assert!(sway_client_colors(&partial).is_none());
+
+        let full = ColorTokens {
+            primary: Some("#7AA2F7".into()),
+            fg: Some("#C0CAF5".into()),
+            bg_dark: Some("#16161E".into()),
+            ..Default::default()
+        };
+        let got = sway_client_colors(&full).unwrap();
+        // border, background, text, indicator, child_border
+        assert_eq!(got[0], "#7AA2F7");
+        assert_eq!(got[1], "#16161E");
+        assert_eq!(got[2], "#C0CAF5");
+        assert_eq!(got[3], "#7AA2F7");
+        assert_eq!(got[4], "#7AA2F7");
+    }
+
+    #[test]
+    fn sway_colors_fall_back_to_bg_when_no_bg_dark() {
+        let c = ColorTokens {
+            primary: Some("#111".into()),
+            fg: Some("#eee".into()),
+            bg: Some("#222".into()),
+            ..Default::default()
+        };
+        assert_eq!(sway_client_colors(&c).unwrap()[1], "#222");
+    }
+
+    #[test]
+    fn gtk_color_scheme_maps_variants() {
+        assert_eq!(gtk_color_scheme("dark"), Some("prefer-dark"));
+        assert_eq!(gtk_color_scheme("light"), Some("prefer-light"));
+        assert_eq!(gtk_color_scheme("sepia"), None);
+    }
+
+    #[test]
+    fn presentation_toggles_and_sets_explicitly() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe(
+            "p",
+            [levshell_core::EventKind::PresentationModeChanged],
+            4,
+        );
+        let s = ThemeService::new(None, bus).with_propagation(false);
+        assert!(!s.presentation());
+
+        assert!(s.set_presentation(Some("on")));
+        assert!(s.presentation());
+        assert!(!s.set_presentation(Some("off")));
+        assert!(s.set_presentation(None)); // toggle from false → true
+        assert!(!s.set_presentation(Some("toggle"))); // explicit toggle flips
+
+        // The bus saw a PresentationModeChanged for the first set.
+        match rx.try_recv() {
+            Ok(Event::PresentationModeChanged { on }) => assert!(on),
+            other => panic!("expected PresentationModeChanged, got {other:?}"),
+        }
     }
 
     #[test]
@@ -431,7 +617,8 @@ variant = "dark"
             )
             .unwrap();
         }
-        let s = ThemeService::new(Some(dir.path().to_path_buf()), EventBus::new());
+        let s = ThemeService::new(Some(dir.path().to_path_buf()), EventBus::new())
+            .with_propagation(false);
         assert_eq!(s.list(), vec!["a".to_string(), "b".to_string()]);
     }
 }

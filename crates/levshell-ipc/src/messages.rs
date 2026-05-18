@@ -79,6 +79,17 @@ pub enum DaemonMessage {
     /// Freedesktop path so the shell shows it even when another daemon
     /// owns `org.freedesktop.Notifications`.
     Nudge(Nudge),
+    /// Presentation mode toggled (spec §2.18). The shell hides
+    /// non-critical surfaces — the ideation toast and the warmup /
+    /// rubber-duck overlays — for the duration. Critical escalations
+    /// still render. Pushed by the theme service on a ctl request.
+    PresentationMode(PresentationMode),
+}
+
+/// Payload for [`DaemonMessage::PresentationMode`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PresentationMode {
+    pub on: bool,
 }
 
 /// Payload for [`DaemonMessage::Nudge`]. `kind` is the ideation

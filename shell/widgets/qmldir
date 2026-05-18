@@ -5,6 +5,8 @@ CpuWidget 1.0 CpuWidget.qml
 MemoryWidget 1.0 MemoryWidget.qml
 BatteryWidget 1.0 BatteryWidget.qml
 NetworkWidget 1.0 NetworkWidget.qml
+DiskWidget 1.0 DiskWidget.qml
+PowerProfileWidget 1.0 PowerProfileWidget.qml
 NotificationsWidget 1.0 NotificationsWidget.qml
 ControlCenterWidget 1.0 ControlCenterWidget.qml
 Sparkline 1.0 Sparkline.qml

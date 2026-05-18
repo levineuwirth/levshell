@@ -17,6 +17,7 @@ levshell-ipc.workspace = true
 levshell-projects.workspace = true
 chrono.workspace = true
 rand.workspace = true
+rustix.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

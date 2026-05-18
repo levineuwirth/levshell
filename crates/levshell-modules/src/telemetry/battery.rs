@@ -79,6 +79,23 @@ pub struct BatteryState {
     pub status: BatteryStatus,
     pub on_battery: bool,
     pub time_remaining_seconds: Option<u64>,
+    /// Instantaneous draw/charge rate in watts (spec §2.3.2), from
+    /// `power_now`. `None` when the platform doesn't export it (some
+    /// batteries only expose `current_now`/`voltage_now`).
+    pub power_watts: Option<f64>,
+}
+
+/// Read `power_now` (µW) and return it in watts, rounded to one decimal
+/// — enough resolution for "is something hammering the CPU" without
+/// jittering the display every poll. `None` when the file is absent or
+/// unparseable.
+fn read_power_watts(dir: &Path) -> Option<f64> {
+    let micro: u64 = std::fs::read_to_string(dir.join("power_now"))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
+    Some(((micro as f64 / 1_000_000.0) * 10.0).round() / 10.0)
 }
 
 /// Find the first directory under `base` whose `type` file contains
@@ -109,12 +126,14 @@ pub fn read_battery_state(dir: &Path) -> Option<BatteryState> {
     let status = BatteryStatus::parse(&status_text);
     let on_battery = matches!(status, BatteryStatus::Discharging);
     let time_remaining_seconds = estimate_time_remaining(dir, status);
+    let power_watts = read_power_watts(dir);
 
     Some(BatteryState {
         percent,
         status,
         on_battery,
         time_remaining_seconds,
+        power_watts,
     })
 }
 
@@ -429,6 +448,30 @@ mod tests {
         assert_eq!(state.status, BatteryStatus::Charging);
         assert!(!state.on_battery);
         assert_eq!(state.time_remaining_seconds, Some(3600));
+    }
+
+    #[test]
+    fn reads_power_watts_from_power_now() {
+        let dir = tempfile::tempdir().unwrap();
+        let bat = dir.path().join("BAT0");
+        std::fs::create_dir_all(&bat).unwrap();
+        std::fs::write(bat.join("capacity"), "60\n").unwrap();
+        std::fs::write(bat.join("status"), "Discharging\n").unwrap();
+        // 12_345_678 µW → 12.345678 W → rounds to 12.3 W.
+        std::fs::write(bat.join("power_now"), "12345678\n").unwrap();
+        let state = read_battery_state(&bat).unwrap();
+        assert_eq!(state.power_watts, Some(12.3));
+    }
+
+    #[test]
+    fn power_watts_absent_when_power_now_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let bat = dir.path().join("BAT0");
+        std::fs::create_dir_all(&bat).unwrap();
+        std::fs::write(bat.join("capacity"), "60\n").unwrap();
+        std::fs::write(bat.join("status"), "Discharging\n").unwrap();
+        let state = read_battery_state(&bat).unwrap();
+        assert_eq!(state.power_watts, None);
     }
 
     #[test]

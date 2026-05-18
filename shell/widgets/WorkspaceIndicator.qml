@@ -6,8 +6,14 @@
 //   {
 //     "workspaces": [{ "name": "...", "num": 1, "focused": true, ... }, ...],
 //     "active": "research",
-//     "focused_window": "Alacritty"
+//     "focused_window": "Alacritty",
+//     "project": "Sparse Attention"   // owning project, or null
 //   }
+//
+// The pills are the workspace list; a breadcrumb trail
+// `› project › window` (spec §2.1.3) follows it, segments dropped when
+// absent. Hidden below `visible` prominence so a tight bar keeps just
+// the pills.
 
 import QtQuick
 import ".."
@@ -20,6 +26,19 @@ WidgetWrapper {
     property var widgetState: ({})
 
     readonly property var workspaces: (widgetState && widgetState.workspaces) || []
+    readonly property string activeProject: (widgetState && widgetState.project) || ""
+    readonly property string focusedWindow: (widgetState && widgetState.focused_window) || ""
+
+    // `project › window`, each segment included only when present.
+    readonly property string breadcrumb: {
+        const parts = [];
+        if (activeProject.length > 0) parts.push(activeProject);
+        if (focusedWindow.length > 0) parts.push(focusedWindow);
+        return parts.join("  ›  ");
+    }
+    readonly property bool showBreadcrumb:
+        breadcrumb.length > 0
+        && (root.prominence === "visible" || root.prominence === "expanded")
 
     Row {
         anchors.verticalCenter: parent.verticalCenter
@@ -71,6 +90,20 @@ WidgetWrapper {
                     })
                 }
             }
+        }
+
+        // Breadcrumb: where the focused workspace sits (project) and
+        // what's in front of you (window). The leading `›` separates it
+        // from the pill strip.
+        Text {
+            anchors.verticalCenter: parent.verticalCenter
+            visible: root.showBreadcrumb
+            text: "›  " + root.breadcrumb
+            color: root.subtleColor
+            font.family: Theme.fontText
+            font.pixelSize: Theme.typeLabel
+            font.weight: Theme.typeLabelWeight
+            elide: Text.ElideRight
         }
     }
 }

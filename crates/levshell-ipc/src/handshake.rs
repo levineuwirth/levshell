@@ -374,6 +374,10 @@ pub enum ThemeAction {
     Query,
     /// Enumerate available theme names.
     List,
+    /// Toggle presentation mode (spec §2.18) — mute non-critical
+    /// surfaces for screen-sharing / talks. `name` carries the desired
+    /// state: `"on"`, `"off"`, or `"toggle"` (default when omitted).
+    Presentation,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]

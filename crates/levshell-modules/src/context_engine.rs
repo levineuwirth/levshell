@@ -520,9 +520,23 @@ pub fn default_widgets() -> Vec<WidgetDef> {
             .with_default(Prominence::Compact)
             .with_priority(45)
             .with_zone(Zone::Right),
+        // Disk-space watcher (spec §2.3.4). Compact (a "%") by default —
+        // it only earns attention as a mount fills, at which point its
+        // own escalation drives the cascade to widen it.
+        WidgetDef::new("disk", "disk")
+            .with_default(Prominence::Compact)
+            .with_priority(50)
+            .with_zone(Zone::Right),
         WidgetDef::new("network", "network")
             .with_default(Prominence::IconOnly)
             .with_priority(55)
+            .with_zone(Zone::Right),
+        // Power-profile switcher (spec §2.3.2). Compact ("balanced")
+        // sits next to the battery; click cycles power-saver →
+        // balanced → performance. Self-parks where PPD isn't running.
+        WidgetDef::new("power-profile", "power_profile")
+            .with_default(Prominence::Compact)
+            .with_priority(58)
             .with_zone(Zone::Right),
         WidgetDef::new("battery", "battery")
             .with_default(Prominence::IconOnly)
@@ -910,5 +924,6 @@ mod tests {
         assert!(ids.contains(&"workspace-indicator"));
         assert!(ids.contains(&"clock"));
         assert!(ids.contains(&"battery"));
+        assert!(ids.contains(&"disk"));
     }
 }

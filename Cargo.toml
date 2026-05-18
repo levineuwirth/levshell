@@ -59,6 +59,10 @@ notify = "6"
 # Stochastic scheduling (ideation engine)
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
 
+# Filesystem stats (disk-space telemetry). Pure-Rust raw syscalls on
+# Linux — no libc/C-binding pull, matching the zbus/notify-rust choice.
+rustix = { version = "0.38", default-features = false, features = ["fs"] }
+
 # HTTP client (AnkiConnect sync adapter — localhost only, no TLS needed)
 # CalDAV needs rustls-tls-native-roots for real servers over HTTPS.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }

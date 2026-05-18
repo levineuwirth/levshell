@@ -164,6 +164,14 @@ pub enum Event {
         variant: String,
     },
 
+    /// Presentation mode toggled (spec §2.18). When `on`, non-critical
+    /// surfaces (ideation nudges, ctl notifications, overlays) are
+    /// muted for screen-sharing / talks; Critical escalations still
+    /// pass. Produced by the theme service from a ctl request.
+    PresentationModeChanged {
+        on: bool,
+    },
+
     /// A ctl client requested a warmup-overlay action (spec §2.12.1).
     /// The only meaningful action for v1 is `"open"` — force-fire the
     /// overlay regardless of the gap heuristic. Stringly-typed to
@@ -277,6 +285,7 @@ pub enum EventKind {
     NudgeDelivered,
     SshHostStatus,
     ThemeActivated,
+    PresentationModeChanged,
     WarmupActionRequested,
     DuckActionRequested,
     DuckUserMessage,
@@ -309,6 +318,7 @@ impl Event {
             Event::NudgeDelivered { .. } => EventKind::NudgeDelivered,
             Event::SshHostStatus { .. } => EventKind::SshHostStatus,
             Event::ThemeActivated { .. } => EventKind::ThemeActivated,
+            Event::PresentationModeChanged { .. } => EventKind::PresentationModeChanged,
             Event::WarmupActionRequested { .. } => EventKind::WarmupActionRequested,
             Event::DuckActionRequested { .. } => EventKind::DuckActionRequested,
             Event::DuckUserMessage { .. } => EventKind::DuckUserMessage,

@@ -12,6 +12,7 @@
 //! adds complexity for marginal value.
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -23,6 +24,78 @@ pub const NETWORK_WIDGET_ID: &str = "network";
 pub const NETWORK_WIDGET_TYPE: &str = "network";
 
 const TICK_INTERVAL: Duration = Duration::from_secs(5);
+/// Connect timeout for the latency probe. Anything slower than this is
+/// indistinguishable from "down" for interactive work (SSH, web).
+const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+const DEFAULT_PROBE_TARGET: &str = "1.1.1.1:443";
+
+/// End-to-end link quality, from a TCP-connect round-trip to a fixed
+/// host (spec §2.3.3 "connection quality indicator"). This is the
+/// *reachability* signal `/proc/net/wireless` can't give: a full-bars
+/// wifi association behind a dead uplink still reads `Poor`/`Down`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LinkQuality {
+    Good,
+    Fair,
+    Poor,
+    Down,
+}
+
+/// Map a probe round-trip to a quality bucket. `None` (connect failed or
+/// timed out) is `Down`. Thresholds target *interactive* usability — a
+/// remote shell stays comfortable under ~80 ms and tolerable under
+/// ~250 ms; beyond that every keystrokes-to-echo hurts.
+pub fn classify_latency(rtt: Option<Duration>) -> LinkQuality {
+    match rtt {
+        None => LinkQuality::Down,
+        Some(d) if d < Duration::from_millis(80) => LinkQuality::Good,
+        Some(d) if d < Duration::from_millis(250) => LinkQuality::Fair,
+        Some(_) => LinkQuality::Poor,
+    }
+}
+
+/// `~/.config/levshell/modules/network.toml`. Absent → probe Cloudflare
+/// 1.1.1.1:443 every 30 s. Set `latency_target = ""` to disable the
+/// probe entirely (air-gapped / privacy).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct NetworkConfig {
+    pub latency_target: String,
+    pub probe_secs: u64,
+}
+
+impl Default for NetworkConfig {
+    fn default() -> Self {
+        Self {
+            latency_target: DEFAULT_PROBE_TARGET.to_owned(),
+            probe_secs: 30,
+        }
+    }
+}
+
+impl NetworkConfig {
+    pub fn load_from_dir(dir: &Path) -> Self {
+        let path = dir.join("network.toml");
+        match std::fs::read_to_string(&path) {
+            Ok(t) => toml::from_str(&t).unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "network.toml malformed; using probe defaults");
+                Self::default()
+            }),
+            Err(_) => Self::default(),
+        }
+    }
+
+    /// `None` when the probe is disabled (empty target).
+    fn probe_target(&self) -> Option<&str> {
+        let t = self.latency_target.trim();
+        (!t.is_empty()).then_some(t)
+    }
+
+    fn probe_interval(&self) -> Duration {
+        Duration::from_secs(self.probe_secs.max(5))
+    }
+}
 
 /// Raw byte counters for one interface, as reported by `/proc/net/dev`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,18 +181,82 @@ pub struct IfaceRate {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NetworkState {
     pub interfaces: Vec<IfaceRate>,
+    /// Last probe round-trip in ms; `None` when the probe is disabled or
+    /// hasn't completed a cycle yet.
+    pub latency_ms: Option<u64>,
+    /// `None` when probing is disabled — the shell then shows no dot
+    /// rather than a misleading `Down`.
+    pub quality: Option<LinkQuality>,
 }
 
 pub struct NetworkModule {
     publisher: WidgetPublisher,
     last_sample: Option<(Instant, HashMap<String, IfaceCounters>)>,
+    config: NetworkConfig,
+    /// When the next latency probe is due. The probe runs on a slower
+    /// cadence than the byte-rate tick so it stays a polite single
+    /// connect every `probe_secs`, not every 5 s.
+    next_probe: Instant,
+    /// Last probe result, carried across the ticks between probes so the
+    /// dot doesn't flicker off.
+    last_quality: Option<(Option<u64>, LinkQuality)>,
 }
 
 impl NetworkModule {
     pub fn new(publisher: WidgetPublisher) -> Self {
+        Self::with_config(publisher, NetworkConfig::default())
+    }
+
+    pub fn with_config(publisher: WidgetPublisher, config: NetworkConfig) -> Self {
         Self {
             publisher,
             last_sample: None,
+            config,
+            next_probe: Instant::now(),
+            last_quality: None,
+        }
+    }
+
+    /// TCP-connect probe: time how long a fresh connection to `target`
+    /// takes, capped at [`PROBE_TIMEOUT`]. A connect is enough — we want
+    /// reachability + RTT, not throughput, and it needs no privileges
+    /// (unlike ICMP). DNS resolution, if any, is part of the measured
+    /// time, which is fair: a dead resolver is a degraded link.
+    async fn probe(target: &str) -> Option<Duration> {
+        let start = Instant::now();
+        match tokio::time::timeout(
+            PROBE_TIMEOUT,
+            tokio::net::TcpStream::connect(target),
+        )
+        .await
+        {
+            Ok(Ok(_stream)) => Some(start.elapsed()),
+            Ok(Err(e)) => {
+                tracing::debug!(target, error = %e, "telemetry-network: probe connect failed");
+                None
+            }
+            Err(_) => None, // timed out
+        }
+    }
+
+    /// Run a probe if one is due, update the cached result, and return
+    /// `(latency_ms, quality)` for the current state. Returns `(None,
+    /// None)` when probing is disabled.
+    async fn refresh_quality(&mut self) -> (Option<u64>, Option<LinkQuality>) {
+        let Some(target) = self.config.probe_target() else {
+            return (None, None);
+        };
+        if Instant::now() >= self.next_probe {
+            let target = target.to_owned();
+            let rtt = Self::probe(&target).await;
+            let quality = classify_latency(rtt);
+            let ms = rtt.map(|d| d.as_millis().min(u64::MAX as u128) as u64);
+            self.last_quality = Some((ms, quality));
+            self.next_probe = Instant::now() + self.config.probe_interval();
+        }
+        match self.last_quality {
+            Some((ms, q)) => (ms, Some(q)),
+            None => (None, None),
         }
     }
 
@@ -213,7 +350,12 @@ impl Module for NetworkModule {
         };
 
         self.last_sample = Some((now, sample));
-        self.publish(&NetworkState { interfaces });
+        let (latency_ms, quality) = self.refresh_quality().await;
+        self.publish(&NetworkState {
+            interfaces,
+            latency_ms,
+            quality,
+        });
         Ok(())
     }
 }
@@ -265,6 +407,68 @@ mod tests {
         // Header lines "Inter-| sta-|..." and " face | tus |..." contain
         // no colon, so they must not show up as keys.
         assert_eq!(q.len(), 1);
+    }
+
+    #[test]
+    fn classify_latency_buckets() {
+        assert_eq!(classify_latency(None), LinkQuality::Down);
+        assert_eq!(
+            classify_latency(Some(Duration::from_millis(5))),
+            LinkQuality::Good
+        );
+        assert_eq!(
+            classify_latency(Some(Duration::from_millis(79))),
+            LinkQuality::Good
+        );
+        assert_eq!(
+            classify_latency(Some(Duration::from_millis(80))),
+            LinkQuality::Fair
+        );
+        assert_eq!(
+            classify_latency(Some(Duration::from_millis(249))),
+            LinkQuality::Fair
+        );
+        assert_eq!(
+            classify_latency(Some(Duration::from_millis(250))),
+            LinkQuality::Poor
+        );
+        assert_eq!(
+            classify_latency(Some(Duration::from_secs(3))),
+            LinkQuality::Poor
+        );
+    }
+
+    #[test]
+    fn empty_target_disables_probe() {
+        let cfg = NetworkConfig {
+            latency_target: "  ".into(),
+            probe_secs: 30,
+        };
+        assert!(cfg.probe_target().is_none());
+    }
+
+    #[test]
+    fn default_config_probes_cloudflare() {
+        let cfg = NetworkConfig::default();
+        assert_eq!(cfg.probe_target(), Some("1.1.1.1:443"));
+        assert_eq!(cfg.probe_interval(), Duration::from_secs(30));
+    }
+
+    #[test]
+    fn probe_interval_has_a_floor() {
+        // A 0/1-second config would hammer the endpoint; clamp to 5 s.
+        let cfg = NetworkConfig {
+            latency_target: "x:1".into(),
+            probe_secs: 1,
+        };
+        assert_eq!(cfg.probe_interval(), Duration::from_secs(5));
+    }
+
+    #[test]
+    fn missing_network_toml_uses_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = NetworkConfig::load_from_dir(dir.path());
+        assert_eq!(cfg.latency_target, "1.1.1.1:443");
     }
 
     #[test]

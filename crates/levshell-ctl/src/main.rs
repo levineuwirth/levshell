@@ -284,6 +284,14 @@ enum ThemeCmd {
         #[arg(long)]
         force: bool,
     },
+    /// Toggle presentation mode (spec §2.18) — mute non-critical
+    /// surfaces (nudges, overlays, normal notifications) for talks /
+    /// screen-sharing. With no argument, flips the current state.
+    Presentation {
+        /// `on`, `off`, or `toggle` (default).
+        #[arg(value_parser = ["on", "off", "toggle"], default_value = "toggle")]
+        state: String,
+    },
 }
 
 #[derive(Debug, Copy, Clone, ValueEnum)]
@@ -487,6 +495,10 @@ fn build_request(cmd: Command) -> CtlRequest {
             ThemeCmd::List => CtlRequest::Theme {
                 action: ThemeAction::List,
                 name: None,
+            },
+            ThemeCmd::Presentation { state } => CtlRequest::Theme {
+                action: ThemeAction::Presentation,
+                name: Some(state),
             },
             ThemeCmd::Bootstrap { .. } => {
                 // Handled in real_main before IPC dispatch.

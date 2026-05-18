@@ -13,11 +13,14 @@ use levshell_daemon::{init_tracing, run_with_sync, DaemonConfig, ModuleFactory, 
 use levshell_modules::{
     default_context_engine, default_palette_providers, default_warmup_state_path, AnkiDueModule,
     AnkiReviewModule, ArxivConfig, ArxivWatchModule, BatteryModule, ClockModule, CpuModule,
+    DiskConfig, DiskModule,
     FocusModeModule, GpuDashboardModule,
     HostRegistry,
-    IdeationModule, InterruptionCostModule, LatexStatusModule, MemoryModule, NetworkModule,
+    IdeationModule, InterruptionCostModule, LatexStatusModule, MemoryModule, NetworkConfig,
+    NetworkModule,
     NotificationsModule,
-    PaletteModule, ProcessSniperModule, ProjectPulseModule, ReferenceLibraryModule,
+    PaletteModule, PowerProfilesModule, ProcessSniperModule, ProjectPulseModule,
+    ReferenceLibraryModule,
     RemoteJobsModule, RemoteRunner,
     RubberDuckConfig,
     RubberDuckModule, SessionTimerConfig, SessionTimerModule, SshMonitorModule, SshRunner,
@@ -140,6 +143,25 @@ async fn main() -> Result<()> {
         .map(|dir| ArxivConfig::load_from_dir(&dir))
         .unwrap_or_default();
 
+    // Disk-space watcher config (spec §2.3.4). Missing `disk.toml` →
+    // watch `/` alone (the mount whose filling actually breaks a
+    // session).
+    let disk_config = levshell_config::default_config_base()
+        .map(|dir| DiskConfig::load_from_dir(&dir))
+        .unwrap_or_default();
+    tracing::info!(mounts = ?disk_config.mounts, "disk watcher config loaded");
+
+    // Network latency-probe config (spec §2.3.3). Missing `network.toml`
+    // → probe 1.1.1.1:443 every 30 s; `latency_target = ""` disables it.
+    let network_config = levshell_config::default_config_base()
+        .map(|dir| NetworkConfig::load_from_dir(&dir))
+        .unwrap_or_default();
+    tracing::info!(
+        target = %network_config.latency_target,
+        probe_secs = network_config.probe_secs,
+        "network latency-probe config loaded"
+    );
+
     let warmup_state_path = default_warmup_state_path();
     tracing::info!(
         gap_secs = warmup_config.gap_secs,
@@ -197,6 +219,8 @@ async fn main() -> Result<()> {
         let rubber_duck_config = rubber_duck_config.clone();
         let session_timer_config = session_timer_config.clone();
         let arxiv_config = arxiv_config.clone();
+        let disk_config = disk_config.clone();
+        let network_config = network_config.clone();
         Box::new(move |bus, publisher, store, projects| {
             let context_engine = {
                 let ce = default_context_engine(publisher.clone())
@@ -231,6 +255,13 @@ async fn main() -> Result<()> {
                 store.clone(),
                 publisher.clone(),
             );
+            // Constructed here (before `projects` is moved into warmup)
+            // so the workspace breadcrumb can resolve project ownership.
+            let sway_workspace = SwayWorkspaceModule::new(
+                bus.clone(),
+                publisher.clone(),
+                projects.clone(),
+            );
             let session_timer = SessionTimerModule::new(
                 bus.clone(),
                 publisher.clone(),
@@ -240,6 +271,9 @@ async fn main() -> Result<()> {
             let latex_status = LatexStatusModule::new(publisher.clone());
             let arxiv_watch =
                 ArxivWatchModule::new(arxiv_config.clone(), publisher.clone());
+            let disk =
+                DiskModule::new(bus.clone(), publisher.clone(), disk_config.clone());
+            let power_profiles = PowerProfilesModule::new(publisher.clone());
             let warmup = WarmupModule::with_config(
                 publisher.clone(),
                 store,
@@ -271,8 +305,7 @@ async fn main() -> Result<()> {
                 RemoteJobsModule::new(host_registry.clone(), ssh_runner, publisher.clone());
 
             vec![
-                Box::new(SwayWorkspaceModule::new(bus.clone(), publisher.clone()))
-                    as Box<dyn levshell_core::Module>,
+                Box::new(sway_workspace) as Box<dyn levshell_core::Module>,
                 Box::new(InterruptionCostModule::new(publisher.clone()))
                     as Box<dyn levshell_core::Module>,
                 Box::new(context_engine) as Box<dyn levshell_core::Module>,
@@ -285,7 +318,10 @@ async fn main() -> Result<()> {
                     as Box<dyn levshell_core::Module>,
                 Box::new(UPowerWatcherModule::new(bus.clone()))
                     as Box<dyn levshell_core::Module>,
-                Box::new(NetworkModule::new(publisher)) as Box<dyn levshell_core::Module>,
+                Box::new(NetworkModule::with_config(publisher, network_config.clone()))
+                    as Box<dyn levshell_core::Module>,
+                Box::new(disk) as Box<dyn levshell_core::Module>,
+                Box::new(power_profiles) as Box<dyn levshell_core::Module>,
                 Box::new(palette) as Box<dyn levshell_core::Module>,
                 Box::new(ideation) as Box<dyn levshell_core::Module>,
                 Box::new(clock) as Box<dyn levshell_core::Module>,
