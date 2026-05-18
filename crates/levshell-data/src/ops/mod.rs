@@ -10,6 +10,7 @@
 
 mod events;
 mod experiments;
+mod export;
 mod flashcards;
 mod graph;
 mod notes;
@@ -21,6 +22,8 @@ mod search;
 mod sync_metadata;
 mod tags;
 mod tasks;
+
+pub use export::{ImportReport, RowMap, StoreExport, EXPORT_VERSION};
 
 pub use graph::{RelatedEntity, RelationDirection};
 

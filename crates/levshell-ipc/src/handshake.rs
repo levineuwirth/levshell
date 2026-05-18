@@ -138,6 +138,16 @@ pub enum CtlRequest {
         name: Option<String>,
     },
 
+    /// Export the whole data store to a JSON snapshot, or restore one
+    /// into an empty store (durability — spec §5.1, the unified store
+    /// must not be a single-opaque-file risk). `path` is an absolute
+    /// filesystem path the *daemon* reads/writes; the ctl client
+    /// resolves it before sending.
+    Data {
+        action: DataAction,
+        path: String,
+    },
+
     /// Open / close / reset the rubber-duck overlay (spec §2.12.6).
     Duck { action: DuckAction },
 
@@ -250,6 +260,17 @@ pub enum ContextSnapshotAction {
     List,
     /// Delete the saved snapshot `name`.
     Delete,
+}
+
+/// Whole-store durability operation. See [`CtlRequest::Data`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum DataAction {
+    /// Write a portable JSON snapshot of every row to `path`.
+    Export,
+    /// Restore a snapshot from `path` into this (empty) store.
+    Import,
 }
 
 /// The daemon's reply to a [`CtlRequest`]. Exactly one of these is written

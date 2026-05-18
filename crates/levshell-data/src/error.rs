@@ -26,4 +26,9 @@ pub enum DataError {
 
     #[error("invalid {field} value: {value}")]
     InvalidEnum { field: &'static str, value: String },
+
+    /// A store export/import was rejected: version mismatch, a
+    /// non-empty restore target, or a malformed snapshot blob.
+    #[error("export/import error: {0}")]
+    Export(String),
 }

@@ -36,10 +36,11 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use levshell_core::{Event, EventBus, Module, ModuleRunner};
-use levshell_data::{DataStore, EntityType};
+use levshell_data::{DataStore, EntityType, StoreExport};
 use levshell_ipc::{
     default_socket_path, spawn_writer_task, BarDensity, ClientRole, ContextSnapshotAction,
-    CtlRequest, CtlResponse, DuckAction, Hello, IpcConnection, IpcServer, JsonCodec, PaletteAction,
+    CtlRequest, CtlResponse, DataAction, DuckAction, Hello, IpcConnection, IpcServer, JsonCodec,
+    PaletteAction,
     ProfileAction, ProjectSummary, ShellMessage, StatusSnapshot, ThemeAction, TimerAction,
     WarmupAction, WidgetPublisher, PROTOCOL_VERSION,
 };
@@ -747,6 +748,8 @@ async fn dispatch_ctl_request(request: CtlRequest, state: &SharedState) -> CtlRe
             dispatch_context_snapshot(action, name).await
         }
 
+        CtlRequest::Data { action, path } => dispatch_data(state, action, &path).await,
+
         CtlRequest::Duck { action } => {
             let action_str = match action {
                 DuckAction::Open => "open",
@@ -878,6 +881,82 @@ async fn dispatch_context_snapshot(
         // here as a soft rejection until the daemon is updated.
         _ => CtlResponse::Error {
             message: "context: unsupported action for this daemon version".into(),
+        },
+    }
+}
+
+/// Whole-store durability (spec §5.1). The daemon owns the store, so
+/// it does the file I/O and returns a one-line summary the ctl client
+/// prints verbatim (reusing the snapshot-result channel — same posture
+/// as the presentation-mode arm). The store layer enforces the real
+/// guarantees: version gate, restore-only-into-empty, atomicity.
+async fn dispatch_data(state: &SharedState, action: DataAction, path: &str) -> CtlResponse {
+    match action {
+        DataAction::Export => {
+            let snap = match state.store.export_all().await {
+                Ok(s) => s,
+                Err(e) => {
+                    return CtlResponse::Error {
+                        message: format!("data export: {e}"),
+                    }
+                }
+            };
+            let bytes = match serde_json::to_vec_pretty(&snap) {
+                Ok(b) => b,
+                Err(e) => {
+                    return CtlResponse::Error {
+                        message: format!("data export: serialize: {e}"),
+                    }
+                }
+            };
+            if let Some(parent) = std::path::Path::new(path).parent() {
+                if !parent.as_os_str().is_empty() {
+                    let _ = tokio::fs::create_dir_all(parent).await;
+                }
+            }
+            match tokio::fs::write(path, &bytes).await {
+                Ok(()) => CtlResponse::ContextSnapshotResult {
+                    summary: format!(
+                        "exported {} records across {} tables to {path}",
+                        snap.row_count(),
+                        snap.tables.len()
+                    ),
+                },
+                Err(e) => CtlResponse::Error {
+                    message: format!("data export: write {path}: {e}"),
+                },
+            }
+        }
+        DataAction::Import => {
+            let bytes = match tokio::fs::read(path).await {
+                Ok(b) => b,
+                Err(e) => {
+                    return CtlResponse::Error {
+                        message: format!("data import: read {path}: {e}"),
+                    }
+                }
+            };
+            let snap: StoreExport = match serde_json::from_slice(&bytes) {
+                Ok(s) => s,
+                Err(e) => {
+                    return CtlResponse::Error {
+                        message: format!("data import: parse {path}: {e}"),
+                    }
+                }
+            };
+            match state.store.import_all(snap).await {
+                Ok(r) => CtlResponse::ContextSnapshotResult {
+                    summary: format!("imported {} records from {path}", r.total()),
+                },
+                Err(e) => CtlResponse::Error {
+                    message: format!("data import: {e}"),
+                },
+            }
+        }
+        // DataAction is non_exhaustive; a newer client's action lands
+        // here as a soft rejection until the daemon is updated.
+        _ => CtlResponse::Error {
+            message: "data: unsupported action for this daemon version".into(),
         },
     }
 }
