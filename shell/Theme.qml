@@ -98,6 +98,26 @@ QtObject {
     property color errorPill: "#B8806A"  // muted terracotta
 
     // =================================================================
+    // UI SCALE — internal, compositor-independent scale factor.
+    //
+    // Multiplies every size-bearing token below (type sizes, spacing,
+    // bar / icon / padding geometry, panel & overlay geometry).
+    // Compositor `output scale` is deliberately NOT used on this box
+    // (other installed software needs an unscaled output), so the shell
+    // scales itself from this one knob.
+    //
+    // Phase-1 stopgap: hardcoded here. Phase 2 makes it daemon-driven
+    // (TOML `[appearance] ui_scale` + `levshell-ctl scale`), pushed
+    // down the same path as `density`. The tokens below *bind* to this,
+    // so they re-evaluate automatically once it becomes dynamic.
+    //
+    // Deliberately NOT scaled: motion durations / springs, opacities,
+    // `*Weight`, line-height ratios, zero tokens, blur radii, and icon
+    // codepoints. `Math.round` keeps borders/strips on whole pixels.
+    // =================================================================
+    property real uiScale: 1.75
+
+    // =================================================================
     // TYPOGRAPHY — §4
     //
     // `fontText` and `fontMono` are overridable via the TOML theme's
@@ -111,19 +131,19 @@ QtObject {
 
     // Type scale (1.2× minor-third, anchored at 13px body). Each entry
     // has a matching weight token.
-    readonly property int typeDisplay:           28
+    readonly property int typeDisplay:           Math.round(28 * uiScale)
     readonly property int typeDisplayWeight:     600
-    readonly property int typeHeadline:          22
+    readonly property int typeHeadline:          Math.round(22 * uiScale)
     readonly property int typeHeadlineWeight:    600
-    readonly property int typeTitle:             17
+    readonly property int typeTitle:             Math.round(17 * uiScale)
     readonly property int typeTitleWeight:       600
-    readonly property int typeBody:              13
+    readonly property int typeBody:              Math.round(13 * uiScale)
     readonly property int typeBodyWeight:        400
-    readonly property int typeBodyEmphasisSize:  13
+    readonly property int typeBodyEmphasisSize:  Math.round(13 * uiScale)
     readonly property int typeBodyEmphasisWeight: 600
-    readonly property int typeLabel:             12
+    readonly property int typeLabel:             Math.round(12 * uiScale)
     readonly property int typeLabelWeight:       500
-    readonly property int typeCaption:           11
+    readonly property int typeCaption:           Math.round(11 * uiScale)
     readonly property int typeCaptionWeight:     400
 
     // Line-height multipliers (QML Text uses `lineHeightMode: ProportionalHeight`).
@@ -134,12 +154,12 @@ QtObject {
     // =================================================================
     // SPACING — §5.1, 4px base unit
     // =================================================================
-    readonly property int spaceXs:  2
-    readonly property int spaceSm:  4
-    readonly property int spaceMd:  8
-    readonly property int spaceLg:  12
-    readonly property int spaceXl:  16
-    readonly property int space2xl: 24
+    readonly property int spaceXs:  Math.round(2 * uiScale)
+    readonly property int spaceSm:  Math.round(4 * uiScale)
+    readonly property int spaceMd:  Math.round(8 * uiScale)
+    readonly property int spaceLg:  Math.round(12 * uiScale)
+    readonly property int spaceXl:  Math.round(16 * uiScale)
+    readonly property int space2xl: Math.round(24 * uiScale)
 
     // =================================================================
     // BAR BLUR AND OPACITY — §3.1.3
@@ -180,20 +200,20 @@ QtObject {
     // =================================================================
     property string density: "full"
 
-    property int barHeightFull:    44
-    property int barHeightCompact: 32
+    property int barHeightFull:    Math.round(44 * uiScale)
+    property int barHeightCompact: Math.round(32 * uiScale)
     readonly property int barHeightHidden:  0
 
-    readonly property int iconSizeFull:    20
-    readonly property int iconSizeCompact: 16
+    readonly property int iconSizeFull:    Math.round(20 * uiScale)
+    readonly property int iconSizeCompact: Math.round(16 * uiScale)
 
-    readonly property int widgetPaddingHFull:    8
-    readonly property int widgetPaddingVFull:    8
-    readonly property int widgetPaddingHCompact: 4
-    readonly property int widgetPaddingVCompact: 4
+    readonly property int widgetPaddingHFull:    Math.round(8 * uiScale)
+    readonly property int widgetPaddingVFull:    Math.round(8 * uiScale)
+    readonly property int widgetPaddingHCompact: Math.round(4 * uiScale)
+    readonly property int widgetPaddingVCompact: Math.round(4 * uiScale)
 
-    readonly property int interWidgetGapFull:    8
-    readonly property int interWidgetGapCompact: 4
+    readonly property int interWidgetGapFull:    Math.round(8 * uiScale)
+    readonly property int interWidgetGapCompact: Math.round(4 * uiScale)
 
     // Density-responsive computed tokens. Widgets and the bar bind to
     // these instead of the static *Full / *Compact variants.
@@ -215,13 +235,13 @@ QtObject {
     // =================================================================
     // DROPDOWN / OVERLAY GEOMETRY — §12.1
     // =================================================================
-    readonly property int panelCornerRadius: 8
-    readonly property int panelInnerPadding: 12   // spaceLg
-    readonly property int panelBorderWidth:  1
+    readonly property int panelCornerRadius: Math.round(8 * uiScale)
+    readonly property int panelInnerPadding: Math.round(12 * uiScale)  // spaceLg
+    readonly property int panelBorderWidth:  Math.round(1 * uiScale)
     // Drop shadow: QML doesn't ship a direct shadow primitive; we paint
     // shadow via a layered Rectangle. Tokens are exposed for consumers.
-    readonly property int  panelShadowOffsetY: 4
-    readonly property int  panelShadowBlur:    16
+    readonly property int  panelShadowOffsetY: Math.round(4 * uiScale)
+    readonly property int  panelShadowBlur:    Math.round(16 * uiScale)
     readonly property real panelShadowOpacity: 0.30
 
     // =================================================================
@@ -266,7 +286,7 @@ QtObject {
     //     prominence == "badge" (no icon/text content at all).
     // =================================================================
     readonly property int widthHidden: 0
-    readonly property int widthBadge:  16
+    readonly property int widthBadge:  Math.round(16 * uiScale)
 
     // =================================================================
     // ICONOGRAPHY — §8 Phosphor Icons private-use-area codepoints
@@ -345,5 +365,5 @@ QtObject {
     // Status indicator icon aliases (referenced by WidgetWrapper).
     readonly property string statusIconStale: iconClockCountdown
     readonly property string statusIconError: iconWarning
-    readonly property int    statusIconSize:  10
+    readonly property int    statusIconSize:  Math.round(10 * uiScale)
 }

@@ -47,8 +47,8 @@ use levshell_context::{
 };
 use levshell_core::{Event, EventKind, Module, ModuleResult, WidgetDescriptor};
 use levshell_ipc::{
-    BarDensity, BarDensityState, BarLayout, DaemonMessage, Prominence, WidgetPublisher,
-    WidgetVisibility,
+    BarDensity, BarDensityState, BarLayout, DaemonMessage, Prominence, UiScaleState,
+    WidgetPublisher, WidgetVisibility,
 };
 
 /// Default placeholder pixel budget until the shell reports its geometry.
@@ -336,6 +336,39 @@ impl ContextEngineModule {
                     tracing::warn!(error = %e, "context-engine: failed to publish BarDensityState");
                 }
             }
+            Event::UiScaleRequested { value } => {
+                // Mirror of BarDensityRequested. `cycle` advances
+                // through the known steps from the stored `ui.scale`
+                // signal; the unset default mirrors Theme.qml's
+                // committed default so the first cycle steps off the
+                // value the user actually sees (only the first step is
+                // affected if the two ever diverge).
+                const STEPS: [f64; 5] = [1.0, 1.25, 1.5, 1.75, 2.0];
+                let resolved: f64 = if value == "cycle" {
+                    let current = self
+                        .signals
+                        .get("ui.scale")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| s.parse::<f64>().ok())
+                        .unwrap_or(1.75);
+                    let idx = STEPS
+                        .iter()
+                        .position(|s| (s - current).abs() < 1e-6)
+                        .unwrap_or(STEPS.len() - 1);
+                    STEPS[(idx + 1) % STEPS.len()]
+                } else {
+                    value.parse::<f64>().unwrap_or(1.75).clamp(0.5, 4.0)
+                };
+                self.signals.set("ui.scale", resolved.to_string());
+                if let Err(e) = self
+                    .publisher
+                    .try_send(DaemonMessage::UiScaleState(UiScaleState {
+                        factor: resolved,
+                    }))
+                {
+                    tracing::warn!(error = %e, "context-engine: failed to publish UiScaleState");
+                }
+            }
             Event::ProfileActionRequested { action, name } => {
                 self.apply_profile_action(action, name.as_deref());
             }
@@ -456,6 +489,7 @@ impl Module for ContextEngineModule {
             EventKind::WindowFocused,
             EventKind::PowerStateChanged,
             EventKind::BarDensityRequested,
+            EventKind::UiScaleRequested,
             EventKind::ProfileActionRequested,
             EventKind::FocusSessionStarted,
             EventKind::FocusSessionEnded,

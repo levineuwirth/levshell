@@ -83,6 +83,17 @@ pub enum CtlRequest {
     /// value from the stored `bar.density` signal, so the client need not
     /// know the current density.
     DensityCycle,
+    /// Set the internal UI scale factor (spec §3.1: compositor-
+    /// independent). `factor` is the decimal multiplier as a string
+    /// (e.g. `"1.75"`) — stringly-typed to keep `CtlRequest: Eq` and
+    /// to match the bus's stringly-typed posture; the ctl client
+    /// range-validates it before sending. No config-file persistence:
+    /// the shell's committed default holds until this is sent.
+    SetScale { factor: String },
+    /// Advance UI scale to the next step server-side
+    /// (1.0 -> 1.25 -> 1.5 -> 1.75 -> 2.0 -> 1.0). The daemon resolves
+    /// the next value from the stored `ui.scale` signal.
+    ScaleCycle,
     /// Activate, cycle, or query a context profile. Phase 1.2 wires the
     /// bus consumer.
     Profile {

@@ -136,6 +136,12 @@ Scope {
     // pointing at the top screen edge transiently reveals the full bar
     // (spec §2.1.4) without disturbing this daemon-owned value.
     property string daemonDensity: "full"
+
+    // Daemon-pushed UI scale (spec §3.1, compositor-independent). 0 ==
+    // "unset": Theme.qml's committed default holds until the first
+    // `levshell-ctl scale`. There is no config-file persistence, same
+    // as daemonDensity.
+    property real daemonUiScale: 0
     property bool barRevealed: false
     property bool warmupOpen: false
     property var warmupPayload: ({ fired_at: "", events: [], anki_due_count: 0, projects: [] })
@@ -430,6 +436,12 @@ Scope {
             shell.daemonDensity = msg.mode || "full";
             break;
         }
+        case "ui_scale_state": {
+            // Bound to Theme.uiScale via the Binding near the bar.
+            // 0/absent leaves Theme.qml's committed default in place.
+            shell.daemonUiScale = msg.factor || 0;
+            break;
+        }
         case "theme": {
             shell.applyTheme(msg);
             break;
@@ -583,8 +595,13 @@ Scope {
         if (b.blur_radius !== undefined && b.blur_radius !== null) Theme.barBlurRadius = b.blur_radius;
         if (b.opacity_battery !== undefined && b.opacity_battery !== null) Theme.barOpacityBattery = b.opacity_battery;
         if (b.blur_radius_battery !== undefined && b.blur_radius_battery !== null) Theme.barBlurRadiusBattery = b.blur_radius_battery;
-        if (b.height_full !== undefined && b.height_full !== null) Theme.barHeightFull = b.height_full;
-        if (b.height_compact !== undefined && b.height_compact !== null) Theme.barHeightCompact = b.height_compact;
+        // These two are the only size tokens a TOML override can
+        // assign (the rest are readonly bindings on Theme.uiScale). A
+        // raw assignment would replace the scaled binding with an
+        // unscaled value, so an explicit bar height would render 1×
+        // while the rest of the UI is scaled. Scale the override too.
+        if (b.height_full !== undefined && b.height_full !== null) Theme.barHeightFull = Math.round(b.height_full * Theme.uiScale);
+        if (b.height_compact !== undefined && b.height_compact !== null) Theme.barHeightCompact = Math.round(b.height_compact * Theme.uiScale);
 
         const t = msg.typography || {};
         if (t.font_text) Theme.fontText = t.font_text;
@@ -630,6 +647,16 @@ Scope {
         property: "density"
         value: (shell.daemonDensity === "hidden" && shell.barRevealed)
                 ? "full" : shell.daemonDensity
+    }
+
+    // UI scale (spec §3.1). The `when` guard keeps Theme.qml's
+    // committed default until the daemon pushes a value, so there's no
+    // duplicated default and no flash to 1.0 on connect.
+    Binding {
+        target: Theme
+        property: "uiScale"
+        when: shell.daemonUiScale > 0
+        value: shell.daemonUiScale
     }
 
     property bool barEdgeHovered: false

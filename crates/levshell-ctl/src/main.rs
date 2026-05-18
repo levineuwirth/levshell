@@ -46,6 +46,14 @@ enum Command {
         mode: CliDensity,
     },
 
+    /// Set the internal UI scale factor (e.g. `1.75`), or `cycle` to
+    /// advance 1.0 -> 1.25 -> 1.5 -> 1.75 -> 2.0 -> 1.0 server-side.
+    Scale {
+        /// A positive factor like `1.5`, or the literal `cycle`.
+        #[arg(value_parser = parse_scale_arg)]
+        factor: ScaleArg,
+    },
+
     /// Activate, cycle, or query a context profile.
     Profile {
         #[command(subcommand)]
@@ -376,6 +384,29 @@ enum CliDensity {
     Cycle,
 }
 
+/// `levshell-ctl scale` argument: an explicit factor or the cycle
+/// sentinel. A free float can't be a `ValueEnum` like `CliDensity`, so
+/// it's parsed (and range-checked) by [`parse_scale_arg`] at the clap
+/// layer, keeping `build_request` infallible like every other command.
+#[derive(Debug, Copy, Clone)]
+enum ScaleArg {
+    Cycle,
+    Factor(f64),
+}
+
+fn parse_scale_arg(s: &str) -> Result<ScaleArg, String> {
+    if s.eq_ignore_ascii_case("cycle") {
+        return Ok(ScaleArg::Cycle);
+    }
+    let f: f64 = s
+        .parse()
+        .map_err(|_| format!("expected a number like 1.75 or the word `cycle`, got {s:?}"))?;
+    if !f.is_finite() || !(0.5..=4.0).contains(&f) {
+        return Err(format!("scale factor must be within 0.5..=4.0, got {f}"));
+    }
+    Ok(ScaleArg::Factor(f))
+}
+
 impl From<CliDensity> for BarDensity {
     fn from(value: CliDensity) -> Self {
         match value {
@@ -481,6 +512,12 @@ fn build_request(cmd: Command) -> CtlRequest {
         Command::Density { mode } => match mode {
             CliDensity::Cycle => CtlRequest::DensityCycle,
             other => CtlRequest::Density { mode: other.into() },
+        },
+        Command::Scale { factor } => match factor {
+            ScaleArg::Cycle => CtlRequest::ScaleCycle,
+            ScaleArg::Factor(f) => CtlRequest::SetScale {
+                factor: f.to_string(),
+            },
         },
         Command::Profile { action } => match action {
             ProfileCmd::Activate { name } => CtlRequest::Profile {
