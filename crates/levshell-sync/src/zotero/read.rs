@@ -69,6 +69,10 @@ pub(crate) struct RawItem {
     /// attachment, if any. Storage-type attachments get a `storage:`
     /// prefix preserved verbatim.
     pub pdf_path: Option<String>,
+    /// PDF highlight / note annotations (Zotero 6+ `itemAnnotations`),
+    /// flattened to `highlight — comment` strings. Empty on older
+    /// Zotero (no such table) or items without an annotated attachment.
+    pub annotations: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -151,6 +155,7 @@ pub(crate) fn read_items(conn: &Connection) -> Result<Vec<RawItem>, ZoteroError>
                     creators: Vec::new(),
                     tags: Vec::new(),
                     pdf_path: None,
+                    annotations: Vec::new(),
                 },
             );
         }
@@ -281,6 +286,55 @@ pub(crate) fn read_items(conn: &Connection) -> Result<Vec<RawItem>, ZoteroError>
                 }
             }
         }
+    }
+
+    // Query 6: PDF annotations (Zotero 6+). An annotation's
+    // `parentItemID` is the *attachment* item; that attachment's
+    // `parentItemID` is the reference. Best-effort: the table is absent
+    // on Zotero < 6, and per spec §5.1 a sync adapter must never fail
+    // the whole sync over a tool-schema gap — so a missing table /
+    // malformed row is logged and skipped, not propagated.
+    match conn.prepare(
+        "SELECT att.parentItemID, ia.text, ia.comment \
+         FROM itemAnnotations ia \
+         JOIN itemAttachments att ON att.itemID = ia.parentItemID \
+         LEFT JOIN deletedItems d ON d.itemID = ia.itemID \
+         WHERE att.parentItemID IS NOT NULL AND d.itemID IS NULL \
+         ORDER BY att.parentItemID, ia.sortIndex",
+    ) {
+        Ok(mut stmt) => {
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            });
+            match rows {
+                Ok(rows) => {
+                    for row in rows.flatten() {
+                        let (ref_id, text, comment) = row;
+                        let Some(item) = items_by_id.get_mut(&ref_id) else {
+                            continue;
+                        };
+                        let text = text.unwrap_or_default();
+                        let comment = comment.unwrap_or_default();
+                        let entry = match (text.trim(), comment.trim()) {
+                            ("", "") => continue,
+                            (t, "") => t.to_string(),
+                            ("", c) => c.to_string(),
+                            (t, c) => format!("{t} — {c}"),
+                        };
+                        item.annotations.push(entry);
+                    }
+                }
+                Err(e) => tracing::warn!(error = %e, "zotero: annotation rows unreadable; skipping"),
+            }
+        }
+        Err(e) => tracing::debug!(
+            error = %e,
+            "zotero: itemAnnotations unavailable (pre-6 schema?); no annotations imported"
+        ),
     }
 
     // Stable output order by item key so sync-metadata churn is

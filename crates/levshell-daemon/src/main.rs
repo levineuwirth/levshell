@@ -12,16 +12,21 @@ use levshell_config::{load_profiles_from_dir, spawn_profile_watcher};
 use levshell_daemon::{init_tracing, run_with_sync, DaemonConfig, ModuleFactory, SyncAdapterFactory};
 use levshell_modules::{
     default_context_engine, default_palette_providers, default_warmup_state_path, AnkiDueModule,
-    BatteryModule, ClockModule, CpuModule, FocusModeModule, GpuDashboardModule, HostRegistry,
-    IdeationModule, InterruptionCostModule, MemoryModule, NetworkModule, NotificationsModule,
-    PaletteModule, ProcessSniperModule, RemoteJobsModule, RemoteRunner, RubberDuckConfig,
+    AnkiReviewModule, ArxivConfig, ArxivWatchModule, BatteryModule, ClockModule, CpuModule,
+    FocusModeModule, GpuDashboardModule,
+    HostRegistry,
+    IdeationModule, InterruptionCostModule, LatexStatusModule, MemoryModule, NetworkModule,
+    NotificationsModule,
+    PaletteModule, ProcessSniperModule, ProjectPulseModule, ReferenceLibraryModule,
+    RemoteJobsModule, RemoteRunner,
+    RubberDuckConfig,
     RubberDuckModule, SessionTimerConfig, SessionTimerModule, SshMonitorModule, SshRunner,
     SwayWorkspaceModule, UPowerWatcherModule, WarmupModule,
 };
 use levshell_sync::{
     AnkiConnectAdapter, AnkiConnectConfig, AnkiConnectConfigWatcher, CalDavAdapter, CalDavConfig,
-    CalDavConfigWatcher, ObsidianAdapter, ObsidianConfig, ObsidianConfigWatcher, SyncAdapter,
-    ZoteroAdapter, ZoteroConfig, ZoteroConfigWatcher,
+    CalDavConfigWatcher, MlflowAdapter, MlflowConfig, ObsidianAdapter, ObsidianConfig,
+    ObsidianConfigWatcher, SyncAdapter, ZoteroAdapter, ZoteroConfig, ZoteroConfigWatcher,
 };
 
 #[tokio::main]
@@ -129,6 +134,12 @@ async fn main() -> Result<()> {
         "session-timer config loaded"
     );
 
+    // arXiv watcher config (spec §2.9.9). Dormant unless the user lists
+    // keywords/authors in modules/arxiv.toml.
+    let arxiv_config = levshell_config::default_config_base()
+        .map(|dir| ArxivConfig::load_from_dir(&dir))
+        .unwrap_or_default();
+
     let warmup_state_path = default_warmup_state_path();
     tracing::info!(
         gap_secs = warmup_config.gap_secs,
@@ -185,6 +196,7 @@ async fn main() -> Result<()> {
         let warmup_state_path = warmup_state_path.clone();
         let rubber_duck_config = rubber_duck_config.clone();
         let session_timer_config = session_timer_config.clone();
+        let arxiv_config = arxiv_config.clone();
         Box::new(move |bus, publisher, store, projects| {
             let context_engine = {
                 let ce = default_context_engine(publisher.clone())
@@ -210,12 +222,24 @@ async fn main() -> Result<()> {
             // `publisher` is moved into NetworkModule in the vec below.
             let clock = ClockModule::new(store.clone(), publisher.clone());
             let anki_due = AnkiDueModule::new(store.clone(), publisher.clone());
+            let anki_review =
+                AnkiReviewModule::new(store.clone(), bus.clone(), projects.clone());
+            let reference_library =
+                ReferenceLibraryModule::new(store.clone(), publisher.clone());
+            let project_pulse = ProjectPulseModule::new(
+                projects.clone(),
+                store.clone(),
+                publisher.clone(),
+            );
             let session_timer = SessionTimerModule::new(
                 bus.clone(),
                 publisher.clone(),
                 session_timer_config.clone(),
             );
             let proc_sniper = ProcessSniperModule::new(publisher.clone());
+            let latex_status = LatexStatusModule::new(publisher.clone());
+            let arxiv_watch =
+                ArxivWatchModule::new(arxiv_config.clone(), publisher.clone());
             let warmup = WarmupModule::with_config(
                 publisher.clone(),
                 store,
@@ -266,6 +290,11 @@ async fn main() -> Result<()> {
                 Box::new(ideation) as Box<dyn levshell_core::Module>,
                 Box::new(clock) as Box<dyn levshell_core::Module>,
                 Box::new(anki_due) as Box<dyn levshell_core::Module>,
+                Box::new(anki_review) as Box<dyn levshell_core::Module>,
+                Box::new(reference_library) as Box<dyn levshell_core::Module>,
+                Box::new(project_pulse) as Box<dyn levshell_core::Module>,
+                Box::new(latex_status) as Box<dyn levshell_core::Module>,
+                Box::new(arxiv_watch) as Box<dyn levshell_core::Module>,
                 Box::new(session_timer) as Box<dyn levshell_core::Module>,
                 Box::new(proc_sniper) as Box<dyn levshell_core::Module>,
                 Box::new(warmup) as Box<dyn levshell_core::Module>,
@@ -503,11 +532,42 @@ async fn main() -> Result<()> {
         _ => None,
     };
 
+    // MLflow experiment-tracker adapter (spec §2.10.7). No hot-reload
+    // watcher (matches the simpler adapters); missing mlflow.toml is the
+    // common case.
+    let mlflow_adapter = sync_dir.as_deref().and_then(|dir| {
+        let path = dir.join("mlflow.toml");
+        if !path.exists() {
+            tracing::debug!(path = %path.display(), "no mlflow.toml found");
+            return None;
+        }
+        match MlflowConfig::load_from(&path) {
+            Ok(cfg) => {
+                tracing::info!(
+                    tracking_uri = %cfg.tracking_uri,
+                    experiment_id = %cfg.experiment_id,
+                    enabled = cfg.enabled,
+                    "registering mlflow sync adapter"
+                );
+                Some(Arc::new(MlflowAdapter::new(cfg)))
+            }
+            Err(e) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "failed to load mlflow.toml; skipping adapter"
+                );
+                None
+            }
+        }
+    });
+
     let sync_factory: SyncAdapterFactory = {
         let obsidian = obsidian_adapter.clone();
         let zotero = zotero_adapter.clone();
         let anki = ankiconnect_adapter.clone();
         let caldav = caldav_adapter.clone();
+        let mlflow = mlflow_adapter.clone();
         Box::new(move || {
             let mut adapters: Vec<Arc<dyn SyncAdapter>> = Vec::new();
             if let Some(a) = obsidian {
@@ -520,6 +580,9 @@ async fn main() -> Result<()> {
                 adapters.push(a);
             }
             if let Some(a) = caldav {
+                adapters.push(a);
+            }
+            if let Some(a) = mlflow {
                 adapters.push(a);
             }
             adapters

@@ -206,6 +206,7 @@ struct Payload<'a> {
     abstract_text: Option<String>,
     pdf_path: Option<String>,
     tags: Vec<String>,
+    annotations: Vec<String>,
 }
 
 fn build_payload<'a>(
@@ -248,6 +249,21 @@ fn build_payload<'a>(
         abstract_text: item.abstract_note.clone(),
         pdf_path: item.pdf_path.clone(),
         tags: item.tags.clone(),
+        annotations: item.annotations.clone(),
+    }
+}
+
+/// Scaffold (or refresh) the literature note for `reference` from its
+/// annotations. Best-effort per spec §5.1 — a scaffold failure must not
+/// fail the sync, so it's logged and swallowed.
+async fn scaffold(ctx: &SyncContext, reference: &levshell_data::Reference) {
+    if let Err(e) = ctx.store.scaffold_note_for_reference(reference).await {
+        tracing::warn!(
+            provider = PROVIDER_NAME,
+            citekey = %reference.citekey,
+            error = %e,
+            "annotation scaffold failed; continuing sync"
+        );
     }
 }
 
@@ -266,7 +282,7 @@ async fn apply_insert(
         abstract_text: payload.abstract_text.clone(),
         pdf_path: payload.pdf_path.clone(),
         reading_progress: None,
-        annotations: Vec::new(),
+        annotations: payload.annotations.clone(),
         project_id: None,
     };
     let reference = match ctx.store.insert_reference(new).await {
@@ -288,6 +304,7 @@ async fn apply_insert(
     };
 
     write_tags(ctx, reference.id, &payload.tags).await?;
+    scaffold(ctx, &reference).await;
     ctx.store
         .set_sync_metadata(SyncMetadata {
             entity_id: reference.id,
@@ -324,7 +341,8 @@ async fn apply_update(
         });
     }
 
-    ctx.store
+    let updated = ctx
+        .store
         .update_reference(
             reference.id,
             ReferencePatch {
@@ -336,13 +354,14 @@ async fn apply_update(
                 citekey: Some(payload.citekey.clone()),
                 abstract_text: Some(payload.abstract_text.clone()),
                 pdf_path: Some(payload.pdf_path.clone()),
-                annotations: Some(Vec::new()),
+                annotations: Some(payload.annotations.clone()),
                 ..Default::default()
             },
         )
         .await?;
 
     replace_tags(ctx, reference.id, &payload.tags).await?;
+    scaffold(ctx, &updated).await;
     ctx.store
         .set_sync_metadata(SyncMetadata {
             entity_id: reference.id,

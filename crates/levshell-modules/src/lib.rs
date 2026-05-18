@@ -11,6 +11,8 @@
 #![forbid(unsafe_code)]
 
 pub mod anki_due;
+pub mod anki_review;
+pub mod arxiv_watch;
 pub mod clock;
 pub mod context_engine;
 pub mod proc_sniper;
@@ -23,6 +25,9 @@ pub mod ideation;
 pub mod interruption;
 pub mod palette;
 pub mod warmup;
+pub mod latex_status;
+pub mod project_pulse;
+pub mod reference_library;
 pub mod remote;
 pub mod session_timer;
 pub mod sway;
@@ -30,6 +35,8 @@ pub mod telemetry;
 pub mod theme;
 
 pub use anki_due::{AnkiDueModule, ANKI_DUE_WIDGET_ID, ANKI_DUE_WIDGET_TYPE};
+pub use anki_review::AnkiReviewModule;
+pub use arxiv_watch::{ArxivConfig, ArxivWatchModule, ARXIV_WIDGET_ID, ARXIV_WIDGET_TYPE};
 pub use clock::ClockModule;
 pub use proc_sniper::ProcessSniperModule;
 pub use context_engine::{
@@ -59,6 +66,13 @@ pub use remote::{
     RemoteJobsModule, RemoteJobsState, RemoteRunner, SlurmJob, SshFleetState, SshHostState,
     SshMonitorModule, SshRunner, GPU_WIDGET_ID, GPU_WIDGET_TYPE, JOBS_WIDGET_ID, JOBS_WIDGET_TYPE,
     SSH_WIDGET_ID, SSH_WIDGET_TYPE,
+};
+pub use latex_status::{LatexStatusModule, LATEX_WIDGET_ID, LATEX_WIDGET_TYPE};
+pub use project_pulse::{
+    ProjectPulseModule, PROJECT_PULSE_WIDGET_ID, PROJECT_PULSE_WIDGET_TYPE,
+};
+pub use reference_library::{
+    ReferenceLibraryModule, REF_LIBRARY_WIDGET_ID, REF_LIBRARY_WIDGET_TYPE,
 };
 pub use session_timer::{
     SessionTimerConfig, SessionTimerModule, SESSION_TIMER_WIDGET_ID, SESSION_TIMER_WIDGET_TYPE,

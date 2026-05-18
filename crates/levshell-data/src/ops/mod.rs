@@ -15,9 +15,12 @@ mod notes;
 mod projects;
 mod refs;
 mod relations;
+mod scaffold;
 mod search;
 mod sync_metadata;
 mod tags;
 mod tasks;
+
+pub use scaffold::SCAFFOLD_RELATION_KIND;
 
 pub use search::{NoteSearchHit, ReferenceSearchHit};
