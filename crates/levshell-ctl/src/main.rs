@@ -14,7 +14,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use levshell_ipc::{
     default_socket_path, BarDensity, ClientRole, ContextSnapshotAction, CtlRequest, CtlResponse,
     DataAction, DuckAction, Hello, IpcConnection, JsonCodec, NotifyUrgency, PaletteAction,
-    ProfileAction,
+    ProfileAction, SettingsAction,
     ThemeAction, TimerAction, WarmupAction,
 };
 use tokio::net::UnixStream;
@@ -173,6 +173,14 @@ enum Command {
         #[command(subcommand)]
         action: ConfigCmd,
     },
+
+    /// Open / close / toggle the on-shell settings overlay. The panel
+    /// itself drives the same runtime paths as the `scale` / `density`
+    /// / `theme` commands; this just shows or hides it.
+    Settings {
+        #[command(subcommand)]
+        action: SettingsCmd,
+    },
 }
 
 #[derive(Debug, Copy, Clone, ValueEnum)]
@@ -299,6 +307,16 @@ enum DuckCmd {
     Close,
     /// Clear the conversation and close the overlay.
     Reset,
+}
+
+#[derive(Debug, Subcommand)]
+enum SettingsCmd {
+    /// Reveal the settings overlay.
+    Open,
+    /// Hide the settings overlay.
+    Close,
+    /// Flip the settings overlay's visibility.
+    Toggle,
 }
 
 #[derive(Debug, Subcommand)]
@@ -731,6 +749,13 @@ fn build_request(cmd: Command) -> CtlRequest {
             ConfigCmd::Set { key, value } => CtlRequest::SetConfig { key, value },
             // Get / Path are handled in real_main before IPC dispatch.
             _ => unreachable!("config get/path are local-only"),
+        },
+        Command::Settings { action } => CtlRequest::Settings {
+            action: match action {
+                SettingsCmd::Open => SettingsAction::Open,
+                SettingsCmd::Close => SettingsAction::Close,
+                SettingsCmd::Toggle => SettingsAction::Toggle,
+            },
         },
     }
 }

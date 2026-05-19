@@ -85,12 +85,22 @@ pub enum DaemonMessage {
     /// rubber-duck overlays — for the duration. Critical escalations
     /// still render. Pushed by the theme service on a ctl request.
     PresentationMode(PresentationMode),
+    /// Show / hide the in-shell settings overlay. Pushed by the theme
+    /// service on a `levshell-ctl settings` request (same posture as
+    /// `PresentationMode`).
+    SettingsPanel(SettingsPanel),
 }
 
 /// Payload for [`DaemonMessage::PresentationMode`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PresentationMode {
     pub on: bool,
+}
+
+/// Payload for [`DaemonMessage::SettingsPanel`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SettingsPanel {
+    pub open: bool,
 }
 
 /// Payload for [`DaemonMessage::Nudge`]. `kind` is the ideation
@@ -207,12 +217,25 @@ pub enum ShellMessage {
     /// vec and kicks off a streaming Ollama request, replying with a
     /// sequence of [`DaemonMessage::DuckToken`] frames.
     DuckSay(DuckSay),
+    /// A control in the settings overlay was changed. `action` is e.g.
+    /// `"set_scale"`, `"set_density"`, `"theme_set"`,
+    /// `"theme_toggle_mode"`, `"follow_system"`, `"presentation"`,
+    /// `"persist"`; `data` carries the params. Same shape as
+    /// [`WidgetAction`] so the QML side builds it the same way.
+    SettingsAction(SettingsActionMsg),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WidgetAction {
     pub widget_id: String,
     pub action: String,
+    pub data: serde_json::Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SettingsActionMsg {
+    pub action: String,
+    #[serde(default)]
     pub data: serde_json::Value,
 }
 

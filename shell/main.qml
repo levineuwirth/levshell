@@ -163,6 +163,12 @@ Scope {
     // talks / screen-sharing. Driven by the daemon's theme service.
     property bool presentationMode: false
 
+    // On-shell settings overlay. Visibility is daemon-authoritative
+    // (DaemonMessage::SettingsPanel); the panel's controls drive the
+    // same runtime paths as `levshell-ctl scale|density|theme` by
+    // sending ShellMessage::SettingsAction back to the daemon.
+    property bool settingsOpen: false
+
     // Ideation nudge toast (§2.9.2). Single-slot — nudges are Poisson-
     // spaced (λ≈45min) so the latest simply replaces any showing one.
     // Auto-dismisses; click dismisses early.
@@ -523,6 +529,10 @@ Scope {
                 shell.warmupOpen = false;
                 shell.duckOpen = false;
             }
+            break;
+        }
+        case "settings_panel": {
+            shell.settingsOpen = !!msg.open;
             break;
         }
         case "critical_escalation": {
@@ -893,6 +903,17 @@ Scope {
         }
     }
 
+    // Settings overlay → daemon. `data` is an optional JSON object the
+    // daemon's handle_settings_action reads per action (see that fn for
+    // the recognised shapes). Mirrors the ctl runtime commands.
+    function sendSettingsAction(action, data) {
+        shell.sendShellMessage({
+            type: "settings_action",
+            action: action,
+            data: data || ({})
+        });
+    }
+
     function sendPaletteQuery(query) {
         shell.sendShellMessage({
             type: "command_palette_query",
@@ -1250,6 +1271,67 @@ Scope {
             payload: shell.processListPayload
             onKill: (pid, signal) => shell.killProcess(pid, signal)
             onRefresh: shell.openProcessSniper()
+        }
+    }
+
+    // ----------------------------------------------------------------------
+    // Settings overlay. Full-screen dim with a centred card; mirrors the
+    // process-sniper close-animation pattern. Controls send
+    // ShellMessage::SettingsAction; visibility stays daemon-authoritative
+    // (closing the card asks the daemon to flip state rather than just
+    // hiding locally, so `levshell-ctl settings` and the panel agree).
+    // ----------------------------------------------------------------------
+    PanelWindow {
+        id: settingsWindow
+
+        property bool isClosing: false
+        visible: shell.settingsOpen || isClosing
+
+        Connections {
+            target: shell
+            function onSettingsOpenChanged() {
+                if (shell.settingsOpen) {
+                    settingsWindow.isClosing = false;
+                    settingsCloseTimer.stop();
+                } else if (settingsWindow.visible && !settingsWindow.isClosing) {
+                    settingsWindow.isClosing = true;
+                    settingsCloseTimer.restart();
+                }
+            }
+        }
+
+        Timer {
+            id: settingsCloseTimer
+            interval: Theme.motionSlow + 50
+            onTriggered: settingsWindow.isClosing = false
+        }
+
+        WlrLayershell.layer: WlrLayer.Overlay
+        WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+        WlrLayershell.namespace: "levshell-settings"
+
+        anchors { top: true; left: true; right: true; bottom: true }
+        // Same full-screen dim convention as the warmup / duck overlays.
+        color: Qt.rgba(0, 0, 0, 0.35)
+
+        // Click outside the card asks the daemon to close (keeps
+        // `levshell-ctl settings` and the panel in agreement).
+        MouseArea {
+            anchors.fill: parent
+            onClicked: shell.sendSettingsAction("close", {})
+        }
+
+        SettingsPanel {
+            id: settingsPanel
+            anchors.centerIn: parent
+            isOpen: shell.settingsOpen
+            uiScale: shell.daemonUiScale > 0 ? shell.daemonUiScale : Theme.uiScale
+            density: shell.daemonDensity
+            presentationOn: shell.presentationMode
+            themeName: Theme.themeName
+            themeVariant: Theme.mode
+            onAction: (action, data) => shell.sendSettingsAction(action, data)
+            onDismiss: shell.sendSettingsAction("close", {})
         }
     }
 
