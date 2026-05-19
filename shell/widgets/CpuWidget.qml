@@ -15,10 +15,10 @@ WidgetWrapper {
     readonly property real loadAvg1: (widgetState && widgetState.load_avg_1) || 0
     readonly property var history: (widgetState && widgetState.history) || []
 
-    // Click toggles the process sniper (spec §2.3.5) — re-click
-    // collapses it, like every other bar icon's dropdown.
+    // Click toggles the process sniper ranked by CPU (spec §2.3.5) —
+    // re-click collapses it, like every other bar icon's dropdown.
     interactive: true
-    onClicked: shell.toggleProcessSniper()
+    onClicked: shell.toggleProcessSniper("cpu")
 
     Row {
         anchors.verticalCenter: parent.verticalCenter

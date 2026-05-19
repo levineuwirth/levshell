@@ -585,7 +585,15 @@ fn route_shell_message(bus: &EventBus, msg: ShellMessage) {
                     ),
                 }
             } else if a.widget_id == "cpu" && a.action == "list_processes" {
-                bus.publish(Event::ProcessListRequested);
+                // Shared sniper: CPU and memory widgets both request it,
+                // differing only by `data.sort` ("cpu" | "mem").
+                // Anything else (or absent) falls back to "cpu".
+                let sort = match a.data.get("sort").and_then(|v| v.as_str()) {
+                    Some("mem") => "mem",
+                    _ => "cpu",
+                }
+                .to_owned();
+                bus.publish(Event::ProcessListRequested { sort });
             } else if a.widget_id == "cpu" && a.action == "kill_process" {
                 match (
                     a.data.get("pid").and_then(|v| v.as_i64()),
@@ -1186,7 +1194,7 @@ mod route_tests {
 
         assert!(matches!(
             sniper.try_recv(),
-            Ok(Event::ProcessListRequested)
+            Ok(Event::ProcessListRequested { sort }) if sort == "cpu"
         ));
         assert!(generic.try_recv().is_err(), "should not double-route");
     }
