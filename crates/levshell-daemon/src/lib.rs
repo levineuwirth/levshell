@@ -46,7 +46,7 @@ use levshell_ipc::{
 };
 use levshell_modules::{
     default_contexts_dir, delete_snapshot, list_snapshots, restore_snapshot, save_current,
-    spawn_theme_watcher, AnkiDueModule, ThemeService,
+    spawn_appearance_watcher, spawn_theme_watcher, AnkiDueModule, ThemeService,
 };
 use levshell_projects::{ProjectRegistry, ProjectRegistryError};
 use levshell_sync::{SyncAdapter, SyncEngine, SyncEngineHandle};
@@ -278,6 +278,10 @@ pub async fn run_with_sync(
         },
         None => None,
     };
+
+    // System dark/light follow (XDG portal). Inert until
+    // `levshell-ctl theme follow-system on`. Kept alive for the run.
+    let _appearance_watcher = spawn_appearance_watcher(theme.clone());
 
     // 3. Bind the IPC server.
     let server = IpcServer::bind(&config.socket_path)
@@ -1032,6 +1036,12 @@ fn dispatch_theme(
             let on = state.theme.set_presentation(name.as_deref());
             CtlResponse::ContextSnapshotResult {
                 summary: format!("presentation mode {}", if on { "on" } else { "off" }),
+            }
+        }
+        ThemeAction::FollowSystem => {
+            let on = state.theme.set_follow_system(name.as_deref());
+            CtlResponse::ContextSnapshotResult {
+                summary: format!("follow-system {}", if on { "on" } else { "off" }),
             }
         }
     }

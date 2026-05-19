@@ -410,6 +410,11 @@ pub enum ThemeAction {
     /// surfaces for screen-sharing / talks. `name` carries the desired
     /// state: `"on"`, `"off"`, or `"toggle"` (default when omitted).
     Presentation,
+    /// Follow the system (XDG portal) light/dark preference, switching
+    /// to the active theme's paired variant on each OS flip. `name`
+    /// carries `"on"`, `"off"`, or `"toggle"`. A manual theme change
+    /// still wins until the next OS flip.
+    FollowSystem,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
