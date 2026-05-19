@@ -5,12 +5,25 @@
 # ~/.config/levshell/sync/<provider>.toml; project declarations in
 # ~/.config/levshell/projects/<slug>.toml.
 #
-# Phase 0: this file is a stub. The schema firms up in Phase 1 alongside the
-# context engine and module system.
+# The [shell] and [appearance] sections below are parsed at daemon
+# start and seed the initial UI state on shell connect. Runtime
+# `levshell-ctl` commands (density / scale / theme follow-system)
+# still override at any time — these are just the boot defaults.
+# Unknown keys/sections are ignored, so [power]/[ipc] remain harmless
+# placeholders until they're wired.
 
 [shell]
-# "full" | "compact" | "hidden"
+# Initial bar density: "full" | "compact" | "hidden".
 density = "full"
+
+[appearance]
+# Internal, compositor-independent UI scale (clamped to 0.5–4.0).
+# Equivalent to `levshell-ctl scale <factor>` but persisted.
+# ui_scale = 1.75
+# Follow the system (XDG desktop-portal) light/dark preference at
+# boot — switches to the active theme's paired variant on each OS
+# flip. Equivalent to `levshell-ctl theme follow-system on`.
+# follow_system = false
 
 [power]
 # When the system is on battery, all module poll intervals are doubled

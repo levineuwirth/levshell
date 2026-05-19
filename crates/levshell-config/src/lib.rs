@@ -13,6 +13,7 @@
 #![forbid(unsafe_code)]
 
 pub mod profiles;
+pub mod settings;
 pub mod themes;
 pub mod watcher;
 
@@ -25,4 +26,5 @@ pub use themes::{
     ColorTokens, HealthTokens, ThemeFile, ThemeFileError, ThemeMeta,
     TypographyTokens, BUILTIN_THEMES,
 };
+pub use settings::{default_settings_path, load_settings, Settings};
 pub use watcher::{watch_config_dir, ConfigChange, ConfigWatcher, WatcherError};
