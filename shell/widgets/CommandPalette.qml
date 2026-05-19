@@ -130,11 +130,11 @@ Rectangle {
         const contentHeight = chromeHeight + rowsHeight + sectionsHeight;
         return Math.min(maxCardHeight, Math.max(chromeHeight + resultRowHeight, contentHeight));
     }
-    // §12.1 + §3.1.3: overlay panels use `surface` at panel.opacity
-    // with backdrop blur, falling back to near-opaque on battery.
-    color: Qt.rgba(Theme.surface.r, Theme.surface.g, Theme.surface.b,
-                   Theme.onBattery ? Theme.panelOpacityBattery
-                                   : Theme.panelOpacity)
+    // §12.1: the palette is the core interaction surface. Sway has no
+    // compositor backdrop blur, so any translucency lets the wallpaper
+    // bleed through and muddies the text. Rendered fully opaque it
+    // stays the cleanest, most legible surface — no alpha at all.
+    color: Theme.surface
     Behavior on color {
         ColorAnimation { duration: Theme.motionNormal }
     }
@@ -375,6 +375,39 @@ Rectangle {
             boundsBehavior: Flickable.StopAtBounds
             interactive: true
             onCurrentIndexChanged: positionViewAtIndex(currentIndex, ListView.Contain)
+
+            // Mouse-wheel scrolling. Qt's default per-notch delta on a
+            // ListView is tiny, so a long result list feels sluggish —
+            // the palette is the core interaction surface, so this
+            // should feel quick. Move ~3 rows per notch with a short
+            // eased glide; successive notches accumulate onto the
+            // pending target instead of resetting, so fast spins stay
+            // fluid. Keyboard nav (positionViewAtIndex above) drives
+            // contentY directly and is untouched by this animation.
+            NumberAnimation {
+                id: wheelAnim
+                target: resultsView
+                property: "contentY"
+                duration: Theme.motionFast
+                easing.type: Easing.OutCubic
+            }
+            WheelHandler {
+                acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+                onWheel: (event) => {
+                    const maxY = Math.max(
+                        0, resultsView.contentHeight - resultsView.height);
+                    const step = root.resultRowHeight * 3;
+                    const dir  = event.angleDelta.y > 0 ? -1 : 1;
+                    const base = wheelAnim.running
+                               ? wheelAnim.to : resultsView.contentY;
+                    const next = Math.max(
+                        0, Math.min(maxY, base + dir * step));
+                    wheelAnim.stop();
+                    wheelAnim.from = resultsView.contentY;
+                    wheelAnim.to   = next;
+                    wheelAnim.start();
+                }
+            }
 
             section.property: "provider"
             section.criteria: ViewSection.FullString
