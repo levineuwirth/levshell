@@ -390,22 +390,25 @@ Rectangle {
         { id: "wifi",       icon: root.wifiRadioOn ? Theme.iconWifiHigh
                                                    : Theme.iconWifiSlash,
           label: "Wi-Fi",          active: root.wifiRadioOn,
-          available: true,                  expandable: true },
+          available: true,                  expandable: true, reason: "" },
         { id: "bluetooth",  icon: Theme.iconBluetooth,
           label: "Bluetooth",      active: root.btRadioOn,
-          available: true,                  expandable: true },
+          available: true,                  expandable: true, reason: "" },
         { id: "dnd",        icon: Theme.iconBellSlash,
           label: "Do Not Disturb", active: root.doNotDisturb,
-          available: true,                  expandable: false },
+          available: true,                  expandable: false, reason: "" },
         { id: "nightlight", icon: Theme.iconMoon,
           label: "Night Light",    active: root.nightLightOn,
-          available: root.nightLightReady,  expandable: false },
+          available: root.nightLightReady,  expandable: false,
+          reason: "gammastep not installed" },
         { id: "screenrec",  icon: Theme.iconVideoCamera,
           label: "Screen Rec",     active: root.screenRecording,
-          available: root.screenRecordReady, expandable: false },
+          available: root.screenRecordReady, expandable: false,
+          reason: "wf-recorder not installed" },
         { id: "vpn",        icon: Theme.iconShieldCheck,
           label: "VPN",            active: root.vpnOn,
-          available: root.vpnReady,         expandable: false },
+          available: root.vpnReady,         expandable: false,
+          reason: "wg-quick / no WireGuard config" },
     ]
 
     function activateTile(id) {
@@ -575,6 +578,10 @@ Rectangle {
                     required property var modelData
                     required property int index
                     readonly property bool avail: modelData.available
+                    // Surface *why* a dimmed tile is inert instead of
+                    // leaving the user to guess (consistent affordance).
+                    readonly property bool showReason:
+                        !avail && (modelData.reason || "").length > 0
                     readonly property bool isExpanded:
                         root.expandedTile === modelData.id
                     width: (parent.width - Theme.spaceSm) / 2
@@ -589,6 +596,10 @@ Rectangle {
 
                     Row {
                         anchors.centerIn: parent
+                        // Nudge the label up so the reason caption has
+                        // room beneath it without changing tile height.
+                        anchors.verticalCenterOffset:
+                            tile.showReason ? -Math.round(7 * Theme.uiScale) : 0
                         spacing: Theme.spaceSm
 
                         Text {
@@ -607,6 +618,23 @@ Rectangle {
                             font.pixelSize: Theme.typeLabel
                             font.weight: Theme.typeLabelWeight
                         }
+                    }
+
+                    // Why this tile is inert — muted caption pinned to
+                    // the bottom of the (dimmed) tile.
+                    Text {
+                        visible: tile.showReason
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        anchors.bottom: parent.bottom
+                        anchors.bottomMargin: Math.round(6 * Theme.uiScale)
+                        width: parent.width - 2 * Theme.spaceSm
+                        horizontalAlignment: Text.AlignHCenter
+                        elide: Text.ElideRight
+                        text: tile.modelData.reason || ""
+                        color: Theme.fgSubtle
+                        font.family: Theme.fontText
+                        font.pixelSize: Theme.typeCaption
+                        font.italic: true
                     }
 
                     // Primary action — fills the tile, sits *under* the

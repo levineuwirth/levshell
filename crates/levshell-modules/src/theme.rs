@@ -55,6 +55,11 @@ struct Inner {
     /// Following the XDG portal light/dark preference. Off by default;
     /// runtime-only (no config persistence).
     follow_system: bool,
+    /// Whether an XDG appearance portal backend was found. False until
+    /// the appearance watcher confirms it can read/subscribe; when it
+    /// stays false, follow-system is inert (e.g. wlroots has no
+    /// `org.freedesktop.portal.Settings/appearance`).
+    appearance_available: bool,
     /// Last system color-scheme observed by the appearance watcher
     /// (`"dark"` / `"light"` / `"no-preference"`). Lets us act only on
     /// a real OS flip (manual changes win until then) and apply the
@@ -84,6 +89,7 @@ impl ThemeService {
                 presentation: false,
                 settings_open: false,
                 follow_system: false,
+                appearance_available: false,
                 last_scheme: None,
             }),
             themes_dir,
@@ -279,12 +285,30 @@ impl ThemeService {
             (open, guard.publisher.clone())
         };
         if let Some(p) = publisher {
-            if let Err(e) = p.try_send(DaemonMessage::SettingsPanel(SettingsPanel { open })) {
+            let (follow_system, follow_system_inert) = {
+                let guard = self.inner.lock().expect("theme service lock poisoned");
+                (guard.follow_system, !guard.appearance_available)
+            };
+            if let Err(e) = p.try_send(DaemonMessage::SettingsPanel(SettingsPanel {
+                open,
+                follow_system,
+                follow_system_inert,
+            })) {
                 tracing::warn!(error = %e, "theme: failed to push SettingsPanel");
             }
         }
         tracing::info!(open, "theme: settings overlay");
         open
+    }
+
+    /// Record that an XDG appearance portal backend is reachable.
+    /// Called once by the appearance watcher when it successfully
+    /// subscribes; absent this, follow-system is reported as inert.
+    pub fn note_appearance_available(&self) {
+        self.inner
+            .lock()
+            .expect("theme service lock poisoned")
+            .appearance_available = true;
     }
 
     /// Current settings-overlay state.
@@ -673,6 +697,7 @@ pub fn spawn_appearance_watcher(
                 return;
             }
         };
+        theme.note_appearance_available();
         tracing::info!("theme: appearance watcher started (follow-system available)");
 
         use futures_util::StreamExt as _;

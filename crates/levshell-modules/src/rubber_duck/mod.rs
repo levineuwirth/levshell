@@ -30,7 +30,7 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use levshell_core::{Event, EventKind, Module, ModuleResult, WidgetDescriptor};
-use levshell_ipc::{DaemonMessage, DuckToken, WidgetPublisher};
+use levshell_ipc::{DaemonMessage, DuckStatus, DuckToken, WidgetPublisher};
 
 use client::{ChatMessage, TokenDelta};
 
@@ -74,6 +74,18 @@ impl RubberDuckModule {
         }
     }
 
+    /// Build a [`DuckStatus`] from the active config. `reachable` /
+    /// `detail` describe the most recent backend interaction.
+    fn status_msg(cfg: &RubberDuckConfig, reachable: bool, detail: String) -> DaemonMessage {
+        DaemonMessage::DuckStatus(DuckStatus {
+            enabled: cfg.enabled,
+            reachable,
+            endpoint: cfg.endpoint.clone(),
+            model: cfg.model.clone(),
+            detail,
+        })
+    }
+
     fn reset_conversation(&self) {
         let mut guard = self.conversation.lock().expect("rubber-duck convo lock");
         guard.clear();
@@ -106,6 +118,11 @@ impl RubberDuckModule {
     async fn handle_user_message(&mut self, text: String) {
         if !self.config.enabled {
             tracing::debug!("rubber-duck: disabled in config; ignoring message");
+            self.publish(Self::status_msg(
+                &self.config,
+                false,
+                "disabled in config".into(),
+            ));
             return;
         }
         if text.trim().is_empty() {
@@ -156,6 +173,10 @@ impl RubberDuckModule {
                             content: accumulated,
                         });
                     }
+                    drop(guard);
+                    // Clear any prior unreachable banner on recovery.
+                    let _ = publisher
+                        .try_send(Self::status_msg(&cfg, true, String::new()));
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "rubber-duck: ollama request failed");
@@ -167,6 +188,12 @@ impl RubberDuckModule {
                         done: true,
                     });
                     let _ = publisher.try_send(msg);
+                    // Drive the dedicated banner with the real reason.
+                    let _ = publisher.try_send(Self::status_msg(
+                        &cfg,
+                        false,
+                        e.to_string(),
+                    ));
                 }
             }
         });
@@ -174,7 +201,12 @@ impl RubberDuckModule {
 
     fn handle_action(&mut self, action: &str) {
         match action {
-            "open" => self.publish(DaemonMessage::DuckOpen),
+            "open" => {
+                self.publish(DaemonMessage::DuckOpen);
+                // Optimistic — `reachable: true` until a send fails;
+                // surfaces the banner immediately when disabled.
+                self.publish(Self::status_msg(&self.config, true, String::new()));
+            }
             "close" => self.publish(DaemonMessage::DuckClose),
             "reset" => {
                 self.reset_conversation();
