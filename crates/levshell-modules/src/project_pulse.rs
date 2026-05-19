@@ -176,13 +176,23 @@ impl ProjectPulseModule {
         let update = WidgetUpdate {
             widget_id: PROJECT_PULSE_WIDGET_ID.into(),
             widget_type: PROJECT_PULSE_WIDGET_TYPE.into(),
+            // Self-park when there is genuinely nothing to surface — no
+            // registered projects and no upcoming deadlines. Mirrors the
+            // other event-driven widgets' "quiet until relevant"
+            // behaviour (PR #24) so a fresh user with no projects.toml
+            // doesn't get an empty pulse pill. With ≥1 project it stays
+            // Compact as before.
+            status: if projects.is_empty() && deadlines.is_empty() {
+                WidgetStatus::Unavailable
+            } else {
+                WidgetStatus::Normal
+            },
             state: serde_json::json!({
                 "active_today": active_today,
                 "dormant": dormant,
                 "projects": projects,
                 "deadlines": deadlines,
             }),
-            status: WidgetStatus::Normal,
             escalation: Default::default(),
         };
         if let Err(e) = self.publisher.try_send(DaemonMessage::WidgetUpdate(update)) {
@@ -238,6 +248,22 @@ mod tests {
         let v: serde_json::Value =
             serde_json::from_str(line.lines().next().unwrap()).unwrap();
         v["state"].clone()
+    }
+
+    /// Like [`first_state`] but returns the whole WidgetUpdate so a
+    /// test can assert `status` (self-park) alongside `state`.
+    async fn first_update(store: DataStore) -> serde_json::Value {
+        let (a, mut b) = duplex(8192);
+        let w = IpcWriter::from_parts(a, JsonCodec);
+        let task = spawn_writer_task(w, 16);
+        let m = ProjectPulseModule::new(None, store, task.publisher);
+        m.refresh().await;
+        let mut buf = vec![0u8; 8192];
+        let n = b.read(&mut buf).await.unwrap();
+        serde_json::from_str(
+            std::str::from_utf8(&buf[..n]).unwrap().lines().next().unwrap(),
+        )
+        .unwrap()
     }
 
     fn task(title: &str, due: chrono::DateTime<Utc>, status: TaskStatus) -> NewTask {
@@ -302,5 +328,32 @@ mod tests {
         let state = first_state(store).await;
         assert_eq!(state["active_today"], 0);
         assert_eq!(state["projects"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn parks_when_no_projects_and_no_deadlines() {
+        // No registry + empty store → nothing to surface → the widget
+        // self-parks (WidgetWrapper collapses it) instead of showing an
+        // empty pulse pill.
+        let store = DataStore::open_in_memory().await.unwrap();
+        let v = first_update(store).await;
+        assert_eq!(v["status"], "unavailable");
+        assert_eq!(v["state"]["projects"].as_array().unwrap().len(), 0);
+        assert_eq!(v["state"]["deadlines"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn stays_normal_when_a_deadline_exists() {
+        // A future event (deadline) with no registered project is still
+        // worth surfacing → status stays Normal even with 0 projects.
+        let store = DataStore::open_in_memory().await.unwrap();
+        store
+            .insert_event(event("advisor meeting", Utc::now() + Duration::days(2)))
+            .await
+            .unwrap();
+        let v = first_update(store).await;
+        assert_eq!(v["status"], "normal");
+        assert_eq!(v["state"]["projects"].as_array().unwrap().len(), 0);
+        assert!(!v["state"]["deadlines"].as_array().unwrap().is_empty());
     }
 }

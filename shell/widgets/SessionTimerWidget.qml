@@ -75,7 +75,10 @@ WidgetWrapper {
             font.pixelSize: Theme.typeLabel
             font.weight: Theme.typeBodyEmphasisWeight
             font.features: ({ "tnum": 1 })
-            visible: root.prominence !== "icon_only"
+            // Idle → just the clock glyph (WidgetWrapper auto-shrinks to
+            // icon width); running/paused → glyph + mm:ss. So the timer
+            // is a quiet icon until a session is actually going.
+            visible: root.prominence !== "icon_only" && root.running
         }
     }
 }
