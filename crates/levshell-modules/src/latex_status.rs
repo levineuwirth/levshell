@@ -143,7 +143,13 @@ impl LatexStatusModule {
                 "log_path": self.log_path.as_ref().map(|p| p.display().to_string()),
                 "error": self.error,
             }),
-            status: WidgetStatus::Normal,
+            // Self-park while idle — the widget only matters while a
+            // build is running or just finished (success/error linger).
+            status: if self.phase == Phase::Idle {
+                WidgetStatus::Unavailable
+            } else {
+                WidgetStatus::Normal
+            },
             escalation: Default::default(),
         };
         if let Err(e) = self.publisher.try_send(DaemonMessage::WidgetUpdate(update)) {

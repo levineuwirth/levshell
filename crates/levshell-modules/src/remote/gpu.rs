@@ -202,7 +202,11 @@ impl GpuDashboardModule {
                 return;
             }
         };
-        let widget_status = if state.hosts.iter().all(|h| h.status != "offline") {
+        // Self-park when no GPU hosts are configured — nothing to show
+        // without a `role = gpu` host registry.
+        let widget_status = if state.hosts.is_empty() {
+            WidgetStatus::Unavailable
+        } else if state.hosts.iter().all(|h| h.status != "offline") {
             WidgetStatus::Normal
         } else {
             WidgetStatus::Stale

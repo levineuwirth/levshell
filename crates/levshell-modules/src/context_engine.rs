@@ -593,6 +593,64 @@ pub fn default_widgets() -> Vec<WidgetDef> {
             .with_default(Prominence::IconOnly)
             .with_priority(22)
             .with_zone(Zone::Right),
+        // ----------------------------------------------------------------
+        // Phase-2 research / focus / remote widgets.
+        //
+        // Two of these are always-present context (session-timer,
+        // project-pulse) and stay Compact. The remaining seven are
+        // event-driven: their modules publish `WidgetStatus::Unavailable`
+        // while dormant, so `WidgetWrapper` collapses them to zero width
+        // (the same self-park mechanism battery/power-profile use on a
+        // box that lacks the hardware). They are placed here so the
+        // cascade gives them a zone; the bar only shows them once their
+        // module has something to say. Priorities sit below the core
+        // telemetry block so a narrow bar demotes/hides these first.
+        // ----------------------------------------------------------------
+        // Always-present project context — sits in the Left zone after
+        // the workspace breadcrumb / interruption pill.
+        WidgetDef::new("project-pulse", "project_pulse")
+            .with_default(Prominence::Compact)
+            .with_priority(92)
+            .with_zone(Zone::Left),
+        // Focus timer lives in the Right zone, just left of battery, so
+        // it doesn't compete with the clock in Center. Priority 62 keeps
+        // it above the telemetry block (it survives a narrow bar longer
+        // since an active session is high-signal).
+        WidgetDef::new("session-timer", "session_timer")
+            .with_default(Prominence::Compact)
+            .with_priority(62)
+            .with_zone(Zone::Right),
+        // Event-driven group: below the telemetry block (cpu = 40) and
+        // above control-center (25), ordered by how actionable each is.
+        // All self-park when dormant, so the bar normally shows 0-2.
+        WidgetDef::new("anki-due", "anki_due")
+            .with_default(Prominence::IconOnly)
+            .with_priority(39)
+            .with_zone(Zone::Right),
+        WidgetDef::new("latex-status", "latex_status")
+            .with_default(Prominence::IconOnly)
+            .with_priority(38)
+            .with_zone(Zone::Right),
+        WidgetDef::new("remote-jobs", "remote_jobs")
+            .with_default(Prominence::IconOnly)
+            .with_priority(37)
+            .with_zone(Zone::Right),
+        WidgetDef::new("gpu-fleet", "gpu_fleet")
+            .with_default(Prominence::IconOnly)
+            .with_priority(36)
+            .with_zone(Zone::Right),
+        WidgetDef::new("ssh-fleet", "ssh_fleet")
+            .with_default(Prominence::IconOnly)
+            .with_priority(35)
+            .with_zone(Zone::Right),
+        WidgetDef::new("arxiv-watch", "arxiv_watch")
+            .with_default(Prominence::IconOnly)
+            .with_priority(34)
+            .with_zone(Zone::Right),
+        WidgetDef::new("reference-library", "reference_library")
+            .with_default(Prominence::IconOnly)
+            .with_priority(33)
+            .with_zone(Zone::Right),
         // Note: the command palette is an overlay, not an in-bar
         // widget, and is intentionally NOT listed here. The shell reads
         // its state directly from a command-palette WidgetUpdate; the
@@ -959,5 +1017,25 @@ mod tests {
         assert!(ids.contains(&"clock"));
         assert!(ids.contains(&"battery"));
         assert!(ids.contains(&"disk"));
+        // Phase-2 widgets are now in the cascade so they get a zone.
+        for id in [
+            "project-pulse",
+            "session-timer",
+            "anki-due",
+            "latex-status",
+            "arxiv-watch",
+            "reference-library",
+            "ssh-fleet",
+            "gpu-fleet",
+            "remote-jobs",
+        ] {
+            assert!(ids.contains(&id), "default_widgets() missing {id}");
+        }
+        // Every id maps to a registered QML component, so duplicates
+        // would shadow a registry entry — guard against a copy-paste slip.
+        let mut sorted = ids.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), ids.len(), "duplicate widget id in default set");
     }
 }

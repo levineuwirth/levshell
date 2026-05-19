@@ -186,7 +186,12 @@ impl SshMonitorModule {
                 return;
             }
         };
-        let widget_status = if state.hosts.iter().any(|h| !h.reachable) {
+        // Self-park when no SSH hosts are configured — the fleet widget
+        // is meaningless without a host registry (the common case on a
+        // workstation with no remote boxes).
+        let widget_status = if state.hosts.is_empty() {
+            WidgetStatus::Unavailable
+        } else if state.hosts.iter().any(|h| !h.reachable) {
             WidgetStatus::Stale
         } else {
             WidgetStatus::Normal
