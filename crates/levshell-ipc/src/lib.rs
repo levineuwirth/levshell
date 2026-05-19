@@ -30,7 +30,7 @@ pub use messages::{
     CommandPaletteSelect, ProcInfo, ProcessListPayload,
     CriticalEscalation, DaemonMessage, DensityChange, DuckSay, DuckToken, EscalationLevel,
     Nudge, PowerState, PresentationMode, Prominence, ShellMessage, ThemeBar, ThemeColors,
-    ThemeHealth, ThemeIcons,
+    ThemeHealth,
     ThemePayload, ThemeTypography, UiScaleState, WarmupEvent, WarmupPayload, WarmupProject,
     WidgetAction,
     WidgetStatus, WidgetUpdate, WidgetVisibility,

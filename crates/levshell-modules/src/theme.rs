@@ -22,12 +22,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use levshell_config::{
-    list_themes, load_theme, BarTokens, ColorTokens, HealthTokens, IconTokens, ThemeFile,
+    list_themes, load_theme, BarTokens, ColorTokens, HealthTokens, ThemeFile,
     TypographyTokens,
 };
 use levshell_core::{Event, EventBus};
 use levshell_ipc::{
-    DaemonMessage, PresentationMode, ThemeBar, ThemeColors, ThemeHealth, ThemeIcons, ThemePayload,
+    DaemonMessage, PresentationMode, ThemeBar, ThemeColors, ThemeHealth, ThemePayload,
     ThemeSnapshot, ThemeTypography, WidgetPublisher,
 };
 
@@ -309,7 +309,6 @@ pub(crate) fn file_to_payload(theme: &ThemeFile) -> ThemePayload {
             .as_ref()
             .map(typography_to_wire)
             .unwrap_or_default(),
-        icons: theme.icons.as_ref().map(icons_to_wire).unwrap_or_default(),
     }
 }
 
@@ -361,13 +360,6 @@ fn typography_to_wire(t: &TypographyTokens) -> ThemeTypography {
         font_text: t.font_text.clone(),
         font_mono: t.font_mono.clone(),
         font_icon: t.font_icon.clone(),
-    }
-}
-
-fn icons_to_wire(i: &IconTokens) -> ThemeIcons {
-    ThemeIcons {
-        style: i.style.clone(),
-        duotone_secondary: i.duotone_secondary.clone(),
     }
 }
 
@@ -491,7 +483,6 @@ mod tests {
             health: None,
             bar: None,
             typography: None,
-            icons: None,
         }
     }
 

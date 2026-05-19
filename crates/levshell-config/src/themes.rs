@@ -56,8 +56,6 @@ pub struct ThemeFile {
     pub bar: Option<BarTokens>,
     #[serde(default)]
     pub typography: Option<TypographyTokens>,
-    #[serde(default)]
-    pub icons: Option<IconTokens>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -167,16 +165,6 @@ pub struct TypographyTokens {
     pub font_mono: Option<String>,
     #[serde(default, rename = "font_icon")]
     pub font_icon: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct IconTokens {
-    /// `"outlined"` or `"duotone"`. Stringly-typed because Theme.qml
-    /// is the consumer and it already is.
-    #[serde(default)]
-    pub style: Option<String>,
-    #[serde(default, rename = "duotone_secondary")]
-    pub duotone_secondary: Option<String>,
 }
 
 impl ThemeFile {
@@ -357,10 +345,6 @@ height_compact = 28
 [typography]
 font_text = "Iosevka"
 font_mono = "JetBrains Mono"
-
-[icons]
-style = "duotone"
-duotone_secondary = "#565F89"
 "##,
         )
         .unwrap();
@@ -378,7 +362,6 @@ duotone_secondary = "#565F89"
             t.typography.unwrap().font_text.as_deref(),
             Some("Iosevka")
         );
-        assert_eq!(t.icons.unwrap().style.as_deref(), Some("duotone"));
     }
 
     #[test]

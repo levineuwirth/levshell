@@ -22,7 +22,7 @@ pub use profiles::{
 };
 pub use themes::{
     bootstrap_themes, default_themes_dir, list_themes, load_theme, BarTokens, BootstrapReport,
-    ColorTokens, HealthTokens, IconTokens, ThemeFile, ThemeFileError, ThemeMeta,
+    ColorTokens, HealthTokens, ThemeFile, ThemeFileError, ThemeMeta,
     TypographyTokens, BUILTIN_THEMES,
 };
 pub use watcher::{watch_config_dir, ConfigChange, ConfigWatcher, WatcherError};
