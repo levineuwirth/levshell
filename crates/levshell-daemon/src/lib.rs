@@ -46,7 +46,7 @@ use levshell_ipc::{
 };
 use levshell_modules::{
     default_contexts_dir, delete_snapshot, list_snapshots, restore_snapshot, save_current,
-    AnkiDueModule, ThemeService,
+    spawn_theme_watcher, AnkiDueModule, ThemeService,
 };
 use levshell_projects::{ProjectRegistry, ProjectRegistryError};
 use levshell_sync::{SyncAdapter, SyncEngine, SyncEngineHandle};
@@ -255,6 +255,29 @@ pub async fn run_with_sync(
     // catches the shell up with no re-load.
     let theme = Arc::new(ThemeService::new(config.themes_dir.clone(), bus.clone()));
     theme.load_default();
+
+    // Theme hot-reload (spec §3.9): editing the active theme's TOML
+    // re-pushes its payload live, matching the profile watcher. Kept
+    // alive by this binding until `run` returns.
+    let _theme_watcher = match config.themes_dir.as_deref() {
+        Some(dir) => match spawn_theme_watcher(dir, theme.clone()) {
+            Ok(w) => {
+                tracing::info!(
+                    dir = %dir.display(),
+                    "theme hot-reload watcher started"
+                );
+                Some(w)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "failed to start theme watcher; hot-reload disabled"
+                );
+                None
+            }
+        },
+        None => None,
+    };
 
     // 3. Bind the IPC server.
     let server = IpcServer::bind(&config.socket_path)

@@ -77,7 +77,7 @@ pub use reference_library::{
 pub use session_timer::{
     SessionTimerConfig, SessionTimerModule, SESSION_TIMER_WIDGET_ID, SESSION_TIMER_WIDGET_TYPE,
 };
-pub use theme::{ThemeService, DEFAULT_THEME_NAME};
+pub use theme::{spawn_theme_watcher, ThemeService, ThemeWatcher, DEFAULT_THEME_NAME};
 pub use warmup::{
     default_warmup_config_path, default_warmup_state_path, PersistedWarmupState, TriggerState,
     WarmupConfig, WarmupConfigError, WarmupModule,

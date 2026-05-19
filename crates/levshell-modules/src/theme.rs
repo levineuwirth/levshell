@@ -18,7 +18,7 @@
 //! `set` / `toggle_mode` are buffered — the theme applies to
 //! `self.active`, and the publisher push is skipped with a warn.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use levshell_config::{
@@ -267,6 +267,21 @@ impl ThemeService {
             );
         }
     }
+
+    /// Re-activate the currently-active theme from disk — the
+    /// hot-reload watcher calls this when a theme TOML changes so an
+    /// edit to the active theme re-pushes its payload live. No-op
+    /// (`Ok`) when nothing is active yet.
+    pub fn reload_active(&self) -> Result<(), String> {
+        let name = {
+            let guard = self.inner.lock().expect("theme service lock poisoned");
+            guard.active_name.clone()
+        };
+        match name {
+            Some(n) => self.activate(&n).map(|_| ()),
+            None => Ok(()),
+        }
+    }
 }
 
 fn theme_snapshot(theme: &ThemeFile) -> ThemeSnapshot {
@@ -406,6 +421,53 @@ fn propagate_to_desktop(theme: &ThemeFile) {
             tracing::debug!(error = %e, "theme: gsettings propagation skipped");
         }
     }
+}
+
+/// Handle to the themes-directory watcher. Owns the OS watch and the
+/// background reload task; drop to stop watching. Mirrors
+/// `levshell_config::ProfileWatcher`.
+pub struct ThemeWatcher {
+    _watcher: levshell_config::ConfigWatcher,
+    _task: tokio::task::JoinHandle<()>,
+}
+
+impl std::fmt::Debug for ThemeWatcher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ThemeWatcher").finish_non_exhaustive()
+    }
+}
+
+/// Hot-reload (spec §3.9): when any `*.toml` under `dir` changes,
+/// re-activate the current theme so editing the active theme file
+/// re-pushes its payload live with no `levshell-ctl theme set`. An
+/// edit to an *inactive* theme file also triggers a reload of the
+/// active one — one TOML parse + payload push, cheap, and keeps the
+/// watcher stateless (same policy as the profile watcher).
+pub fn spawn_theme_watcher(
+    dir: &Path,
+    theme: std::sync::Arc<ThemeService>,
+) -> Result<ThemeWatcher, levshell_config::WatcherError> {
+    let (watcher, mut rx) = levshell_config::watch_config_dir(dir)?;
+    let task = tokio::spawn(async move {
+        while rx.recv().await.is_some() {
+            // Coalesce editor write storms into one reload.
+            while rx.try_recv().is_ok() {}
+            match theme.reload_active() {
+                Ok(()) => {
+                    tracing::info!("theme hot-reload: re-applied active theme")
+                }
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    "theme hot-reload: re-activate failed; keeping current"
+                ),
+            }
+        }
+        tracing::debug!("theme hot-reload: watcher channel closed");
+    });
+    Ok(ThemeWatcher {
+        _watcher: watcher,
+        _task: task,
+    })
 }
 
 #[cfg(test)]
