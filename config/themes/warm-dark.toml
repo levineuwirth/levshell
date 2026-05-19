@@ -63,6 +63,3 @@ height_compact      = 32
 font_text = "Spectral"
 font_mono = "IBM Plex Mono"
 font_icon = "Phosphor"
-
-[icons]
-style = "outlined"

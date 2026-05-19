@@ -18,16 +18,16 @@
 //! `set` / `toggle_mode` are buffered — the theme applies to
 //! `self.active`, and the publisher push is skipped with a warn.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use levshell_config::{
-    list_themes, load_theme, BarTokens, ColorTokens, HealthTokens, IconTokens, ThemeFile,
+    list_themes, load_theme, BarTokens, ColorTokens, HealthTokens, ThemeFile,
     TypographyTokens,
 };
 use levshell_core::{Event, EventBus};
 use levshell_ipc::{
-    DaemonMessage, PresentationMode, ThemeBar, ThemeColors, ThemeHealth, ThemeIcons, ThemePayload,
+    DaemonMessage, PresentationMode, ThemeBar, ThemeColors, ThemeHealth, ThemePayload,
     ThemeSnapshot, ThemeTypography, WidgetPublisher,
 };
 
@@ -42,9 +42,21 @@ pub const DEFAULT_THEME_NAME: &str = "warm-dark";
 #[derive(Debug)]
 struct Inner {
     active: Option<ThemeFile>,
+    /// Stem the active theme was loaded by (the `<name>.toml` id, not
+    /// the display `meta.name`). Pair fields reference stems, so
+    /// `toggle_mode` needs this to detect a self-pair.
+    active_name: Option<String>,
     publisher: Option<WidgetPublisher>,
     /// Presentation mode (spec §2.18) — muted non-critical surfaces.
     presentation: bool,
+    /// Following the XDG portal light/dark preference. Off by default;
+    /// runtime-only (no config persistence).
+    follow_system: bool,
+    /// Last system color-scheme observed by the appearance watcher
+    /// (`"dark"` / `"light"` / `"no-preference"`). Lets us act only on
+    /// a real OS flip (manual changes win until then) and apply the
+    /// current scheme the moment follow-system is switched on.
+    last_scheme: Option<String>,
 }
 
 /// Shared service. Cheap to clone via `Arc`.
@@ -64,8 +76,11 @@ impl ThemeService {
         Self {
             inner: Mutex::new(Inner {
                 active: None,
+                active_name: None,
                 publisher: None,
                 presentation: false,
+                follow_system: false,
+                last_scheme: None,
             }),
             themes_dir,
             bus,
@@ -134,6 +149,7 @@ impl ThemeService {
         let publisher = {
             let mut guard = self.inner.lock().expect("theme service lock poisoned");
             guard.active = Some(theme);
+            guard.active_name = Some(name.to_owned());
             guard.publisher.clone()
         };
         if let Some(p) = publisher {
@@ -175,24 +191,33 @@ impl ThemeService {
     /// error when there's no active theme or the current one
     /// doesn't declare a `light_pair` / `dark_pair`.
     pub fn toggle_mode(&self) -> Result<ThemeSnapshot, String> {
-        let pair_name = {
+        let (pair_name, current) = {
             let guard = self.inner.lock().expect("theme service lock poisoned");
             let Some(active) = guard.active.as_ref() else {
                 return Err("no active theme to toggle from".into());
             };
-            match active.meta.variant.as_str() {
+            let pair = match active.meta.variant.as_str() {
                 "dark" => active.meta.light_pair.clone(),
                 "light" => active.meta.dark_pair.clone(),
                 other => {
                     return Err(format!("active theme has invalid variant {other:?}"));
                 }
-            }
+            };
+            (pair, guard.active_name.clone())
         };
         let Some(pair) = pair_name else {
             return Err(
                 "active theme does not declare a light_pair / dark_pair to toggle to".into(),
             );
         };
+        // A theme naming itself as its own pair would just re-activate
+        // the same theme (no variant change). Reject it loudly rather
+        // than silently no-op.
+        if current.as_deref() == Some(pair.as_str()) {
+            return Err(format!(
+                "active theme's pair points at itself ({pair:?}) — not a light/dark toggle"
+            ));
+        }
         self.activate(&pair)
     }
 
@@ -233,6 +258,93 @@ impl ThemeService {
             .presentation
     }
 
+    /// Enable / disable / toggle following the system light-dark
+    /// preference. Mirrors [`Self::set_presentation`]'s arg handling.
+    /// Turning it **on** immediately syncs to the last-seen system
+    /// scheme (you asked to follow — follow now); subsequent OS flips
+    /// are handled by the appearance watcher. Returns the new state.
+    pub fn set_follow_system(&self, arg: Option<&str>) -> bool {
+        let (on, scheme) = {
+            let mut guard = self.inner.lock().expect("theme service lock poisoned");
+            let on = match arg {
+                Some("on") => true,
+                Some("off") => false,
+                _ => !guard.follow_system, // "toggle" / None / unknown
+            };
+            guard.follow_system = on;
+            (on, guard.last_scheme.clone())
+        };
+        if on {
+            if let Some(s) = scheme {
+                self.apply_system_scheme(&s);
+            }
+        }
+        tracing::info!(on, "theme: follow-system");
+        on
+    }
+
+    /// Called by the appearance watcher on every portal report. Records
+    /// the scheme and, **only on an actual change** while follow-system
+    /// is on, switches variant — so a manual theme change between OS
+    /// flips is left alone.
+    pub fn note_system_scheme(&self, scheme: &str) {
+        let (changed, follow) = {
+            let mut guard = self.inner.lock().expect("theme service lock poisoned");
+            let changed = guard.last_scheme.as_deref() != Some(scheme);
+            guard.last_scheme = Some(scheme.to_owned());
+            (changed, guard.follow_system)
+        };
+        if changed && follow {
+            self.apply_system_scheme(scheme);
+        }
+    }
+
+    /// Switch to the active theme's paired variant matching `scheme`
+    /// (`"dark"`/`"light"`; `"no-preference"` or unknown → no-op). Skips
+    /// quietly when already on the right variant, the theme declares no
+    /// matching pair, or the pair is self-referential.
+    fn apply_system_scheme(&self, scheme: &str) {
+        let want = match scheme {
+            "dark" | "light" => scheme,
+            _ => return,
+        };
+        let pair = {
+            let guard = self.inner.lock().expect("theme service lock poisoned");
+            let Some(active) = guard.active.as_ref() else {
+                return;
+            };
+            if active.meta.variant == want {
+                return; // already the right variant
+            }
+            let candidate = if want == "light" {
+                active.meta.light_pair.clone()
+            } else {
+                active.meta.dark_pair.clone()
+            };
+            match candidate {
+                Some(p) if Some(p.as_str()) != guard.active_name.as_deref() => p,
+                Some(_) => return, // self-pair — ignore
+                None => {
+                    tracing::debug!(
+                        scheme = want,
+                        "theme: follow-system: active theme has no {want} pair; staying"
+                    );
+                    return;
+                }
+            }
+        };
+        match self.activate(&pair) {
+            Ok(s) => tracing::info!(
+                theme = %s.name,
+                variant = %s.variant,
+                "theme: follow-system switched to match the OS"
+            ),
+            Err(e) => {
+                tracing::warn!(error = %e, "theme: follow-system switch failed")
+            }
+        }
+    }
+
     /// Activate [`DEFAULT_THEME_NAME`] if it parses, otherwise log
     /// and leave `active` as `None`. Called from daemon boot before
     /// any shell connects; a later `ThemeService::attach_publisher`
@@ -250,6 +362,21 @@ impl ThemeService {
                 error = %e,
                 "theme: couldn't activate default on boot; shell will use built-in Theme.qml defaults"
             );
+        }
+    }
+
+    /// Re-activate the currently-active theme from disk — the
+    /// hot-reload watcher calls this when a theme TOML changes so an
+    /// edit to the active theme re-pushes its payload live. No-op
+    /// (`Ok`) when nothing is active yet.
+    pub fn reload_active(&self) -> Result<(), String> {
+        let name = {
+            let guard = self.inner.lock().expect("theme service lock poisoned");
+            guard.active_name.clone()
+        };
+        match name {
+            Some(n) => self.activate(&n).map(|_| ()),
+            None => Ok(()),
         }
     }
 }
@@ -279,7 +406,6 @@ pub(crate) fn file_to_payload(theme: &ThemeFile) -> ThemePayload {
             .as_ref()
             .map(typography_to_wire)
             .unwrap_or_default(),
-        icons: theme.icons.as_ref().map(icons_to_wire).unwrap_or_default(),
     }
 }
 
@@ -331,13 +457,6 @@ fn typography_to_wire(t: &TypographyTokens) -> ThemeTypography {
         font_text: t.font_text.clone(),
         font_mono: t.font_mono.clone(),
         font_icon: t.font_icon.clone(),
-    }
-}
-
-fn icons_to_wire(i: &IconTokens) -> ThemeIcons {
-    ThemeIcons {
-        style: i.style.clone(),
-        duotone_secondary: i.duotone_secondary.clone(),
     }
 }
 
@@ -393,6 +512,151 @@ fn propagate_to_desktop(theme: &ThemeFile) {
     }
 }
 
+/// Handle to the themes-directory watcher. Owns the OS watch and the
+/// background reload task; drop to stop watching. Mirrors
+/// `levshell_config::ProfileWatcher`.
+pub struct ThemeWatcher {
+    _watcher: levshell_config::ConfigWatcher,
+    _task: tokio::task::JoinHandle<()>,
+}
+
+impl std::fmt::Debug for ThemeWatcher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ThemeWatcher").finish_non_exhaustive()
+    }
+}
+
+/// Hot-reload (spec §3.9): when any `*.toml` under `dir` changes,
+/// re-activate the current theme so editing the active theme file
+/// re-pushes its payload live with no `levshell-ctl theme set`. An
+/// edit to an *inactive* theme file also triggers a reload of the
+/// active one — one TOML parse + payload push, cheap, and keeps the
+/// watcher stateless (same policy as the profile watcher).
+pub fn spawn_theme_watcher(
+    dir: &Path,
+    theme: std::sync::Arc<ThemeService>,
+) -> Result<ThemeWatcher, levshell_config::WatcherError> {
+    let (watcher, mut rx) = levshell_config::watch_config_dir(dir)?;
+    let task = tokio::spawn(async move {
+        while rx.recv().await.is_some() {
+            // Coalesce editor write storms into one reload.
+            while rx.try_recv().is_ok() {}
+            match theme.reload_active() {
+                Ok(()) => {
+                    tracing::info!("theme hot-reload: re-applied active theme")
+                }
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    "theme hot-reload: re-activate failed; keeping current"
+                ),
+            }
+        }
+        tracing::debug!("theme hot-reload: watcher channel closed");
+    });
+    Ok(ThemeWatcher {
+        _watcher: watcher,
+        _task: task,
+    })
+}
+
+/// Map the XDG `org.freedesktop.appearance` `color-scheme` value
+/// (`0` no-preference, `1` prefer-dark, `2` prefer-light) to our
+/// scheme string. The portal's `Read` double-wraps the value in a
+/// variant, so unwrap one nesting level before reading the `u32`.
+fn scheme_from_portal(v: &zbus::zvariant::Value<'_>) -> Option<&'static str> {
+    let inner = match v {
+        zbus::zvariant::Value::Value(boxed) => boxed.as_ref(),
+        other => other,
+    };
+    let code = u32::try_from(inner).ok()?;
+    Some(match code {
+        1 => "dark",
+        2 => "light",
+        _ => "no-preference",
+    })
+}
+
+/// Watch the XDG desktop portal for the system light/dark preference
+/// and feed each report to [`ThemeService::note_system_scheme`] (which
+/// only acts when follow-system is on and the scheme actually changed).
+/// Fail-soft: no session bus / no portal → the task logs and exits, so
+/// follow-system simply never fires; everything else is unaffected.
+/// The returned handle keeps the task alive for the daemon's lifetime.
+pub fn spawn_appearance_watcher(
+    theme: std::sync::Arc<ThemeService>,
+) -> tokio::task::JoinHandle<()> {
+    const PORTAL_DEST: &str = "org.freedesktop.portal.Desktop";
+    const PORTAL_PATH: &str = "/org/freedesktop/portal/desktop";
+    const PORTAL_IFACE: &str = "org.freedesktop.portal.Settings";
+    const NS: &str = "org.freedesktop.appearance";
+    const KEY: &str = "color-scheme";
+    // zbus has no built-in call timeout; bound the connect + initial
+    // read so a wedged portal can't hang this task forever (it would
+    // only hang itself, but stay tidy — power_profiles precedent).
+    const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+    tokio::spawn(async move {
+        let setup = async {
+            let conn = zbus::Connection::session().await?;
+            let proxy =
+                zbus::Proxy::new(&conn, PORTAL_DEST, PORTAL_PATH, PORTAL_IFACE).await?;
+            let initial: zbus::zvariant::OwnedValue =
+                proxy.call("Read", &(NS, KEY)).await?;
+            Ok::<_, zbus::Error>((proxy, initial))
+        };
+        let (proxy, initial) =
+            match tokio::time::timeout(CONNECT_TIMEOUT, setup).await {
+                Ok(Ok(v)) => v,
+                Ok(Err(e)) => {
+                    tracing::debug!(
+                        error = %e,
+                        "theme: appearance portal unavailable; follow-system inert"
+                    );
+                    return;
+                }
+                Err(_) => {
+                    tracing::debug!(
+                        "theme: appearance portal read timed out; follow-system inert"
+                    );
+                    return;
+                }
+            };
+
+        if let Some(s) = scheme_from_portal(&initial) {
+            theme.note_system_scheme(s);
+        }
+
+        let mut changes = match proxy.receive_signal("SettingChanged").await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::debug!(
+                    error = %e,
+                    "theme: cannot subscribe to portal SettingChanged; follow-system inert"
+                );
+                return;
+            }
+        };
+        tracing::info!("theme: appearance watcher started (follow-system available)");
+
+        use futures_util::StreamExt as _;
+        while let Some(msg) = changes.next().await {
+            let body = msg.body();
+            let Ok((ns, key, value)) =
+                body.deserialize::<(String, String, zbus::zvariant::Value)>()
+            else {
+                continue;
+            };
+            if ns != NS || key != KEY {
+                continue;
+            }
+            if let Some(s) = scheme_from_portal(&value) {
+                theme.note_system_scheme(s);
+            }
+        }
+        tracing::debug!("theme: appearance watcher signal stream ended");
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -414,7 +678,6 @@ mod tests {
             health: None,
             bar: None,
             typography: None,
-            icons: None,
         }
     }
 
@@ -534,6 +797,93 @@ primary = "#EEEEEE"
         let after = s.toggle_mode().unwrap();
         assert_eq!(after.name, "Paired Light");
         assert_eq!(after.variant, "light");
+    }
+
+    #[test]
+    fn toggle_mode_self_pair_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("loopy.toml"),
+            r##"
+[meta]
+name = "Loopy"
+variant = "dark"
+light_pair = "loopy"
+
+[colors]
+"##,
+        )
+        .unwrap();
+        let s = ThemeService::new(Some(dir.path().to_path_buf()), EventBus::new())
+            .with_propagation(false);
+        s.activate("loopy").unwrap();
+        let err = s.toggle_mode().unwrap_err();
+        assert!(err.contains("itself"), "got: {err}");
+    }
+
+    #[test]
+    fn bundled_neutral_pair_toggles_both_ways() {
+        // The shipped neutral-dark ↔ neutral-light pairing, end to end
+        // through the real BUILTIN_THEMES files.
+        let dir = tempfile::tempdir().unwrap();
+        levshell_config::bootstrap_themes(dir.path(), false).unwrap();
+        let s = ThemeService::new(Some(dir.path().to_path_buf()), EventBus::new())
+            .with_propagation(false);
+
+        let nd = s.activate("neutral-dark").unwrap();
+        assert_eq!(nd.variant, "dark");
+        let nl = s.toggle_mode().unwrap();
+        assert_eq!(nl.name, "Neutral Light");
+        assert_eq!(nl.variant, "light");
+        let back = s.toggle_mode().unwrap();
+        assert_eq!(back.name, "Neutral Dark");
+        assert_eq!(back.variant, "dark");
+    }
+
+    #[test]
+    fn follow_system_off_then_on_syncs_flips_and_respects_manual() {
+        let dir = tempfile::tempdir().unwrap();
+        levshell_config::bootstrap_themes(dir.path(), false).unwrap();
+        let s = ThemeService::new(Some(dir.path().to_path_buf()), EventBus::new())
+            .with_propagation(false);
+        s.activate("neutral-dark").unwrap();
+
+        // Off by default: a portal report is recorded but not acted on.
+        s.note_system_scheme("light");
+        assert_eq!(s.snapshot().unwrap().variant, "dark", "off → no switch");
+
+        // Turning it on syncs immediately to the last-seen scheme.
+        assert!(s.set_follow_system(Some("on")));
+        assert_eq!(
+            s.snapshot().unwrap().variant,
+            "light",
+            "enabling follow syncs to current system scheme"
+        );
+
+        // A real OS flip switches variant.
+        s.note_system_scheme("dark");
+        assert_eq!(s.snapshot().unwrap().variant, "dark");
+
+        // Manual override between flips wins; a duplicate (unchanged)
+        // portal report does NOT correct it back.
+        s.activate("neutral-light").unwrap();
+        s.note_system_scheme("dark");
+        assert_eq!(
+            s.snapshot().unwrap().variant,
+            "light",
+            "manual change survives a no-op portal report"
+        );
+
+        // The next genuine flip re-asserts.
+        s.note_system_scheme("light"); // already light → no-op, still light
+        assert_eq!(s.snapshot().unwrap().variant, "light");
+        s.note_system_scheme("dark"); // real change → switch
+        assert_eq!(s.snapshot().unwrap().variant, "dark");
+
+        // Off again: flips are ignored.
+        assert!(!s.set_follow_system(Some("off")));
+        s.note_system_scheme("light");
+        assert_eq!(s.snapshot().unwrap().variant, "dark");
     }
 
     #[test]

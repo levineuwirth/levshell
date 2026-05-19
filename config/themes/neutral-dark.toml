@@ -12,6 +12,8 @@
 name = "Neutral Dark"
 author = "Levshell"
 variant = "dark"
+# Paired light variant for `levshell-ctl theme toggle-mode`.
+light_pair = "neutral-light"
 
 [colors]
 # 4-tier surface hierarchy — true-gray luminance steps.

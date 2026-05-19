@@ -307,8 +307,6 @@ pub struct ThemePayload {
     pub bar: ThemeBar,
     #[serde(default)]
     pub typography: ThemeTypography,
-    #[serde(default)]
-    pub icons: ThemeIcons,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -387,14 +385,6 @@ pub struct ThemeTypography {
     pub font_mono: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_icon: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct ThemeIcons {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub style: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub duotone_secondary: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

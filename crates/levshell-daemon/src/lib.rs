@@ -46,7 +46,7 @@ use levshell_ipc::{
 };
 use levshell_modules::{
     default_contexts_dir, delete_snapshot, list_snapshots, restore_snapshot, save_current,
-    AnkiDueModule, ThemeService,
+    spawn_appearance_watcher, spawn_theme_watcher, AnkiDueModule, ThemeService,
 };
 use levshell_projects::{ProjectRegistry, ProjectRegistryError};
 use levshell_sync::{SyncAdapter, SyncEngine, SyncEngineHandle};
@@ -255,6 +255,33 @@ pub async fn run_with_sync(
     // catches the shell up with no re-load.
     let theme = Arc::new(ThemeService::new(config.themes_dir.clone(), bus.clone()));
     theme.load_default();
+
+    // Theme hot-reload (spec §3.9): editing the active theme's TOML
+    // re-pushes its payload live, matching the profile watcher. Kept
+    // alive by this binding until `run` returns.
+    let _theme_watcher = match config.themes_dir.as_deref() {
+        Some(dir) => match spawn_theme_watcher(dir, theme.clone()) {
+            Ok(w) => {
+                tracing::info!(
+                    dir = %dir.display(),
+                    "theme hot-reload watcher started"
+                );
+                Some(w)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "failed to start theme watcher; hot-reload disabled"
+                );
+                None
+            }
+        },
+        None => None,
+    };
+
+    // System dark/light follow (XDG portal). Inert until
+    // `levshell-ctl theme follow-system on`. Kept alive for the run.
+    let _appearance_watcher = spawn_appearance_watcher(theme.clone());
 
     // 3. Bind the IPC server.
     let server = IpcServer::bind(&config.socket_path)
@@ -1009,6 +1036,12 @@ fn dispatch_theme(
             let on = state.theme.set_presentation(name.as_deref());
             CtlResponse::ContextSnapshotResult {
                 summary: format!("presentation mode {}", if on { "on" } else { "off" }),
+            }
+        }
+        ThemeAction::FollowSystem => {
+            let on = state.theme.set_follow_system(name.as_deref());
+            CtlResponse::ContextSnapshotResult {
+                summary: format!("follow-system {}", if on { "on" } else { "off" }),
             }
         }
     }

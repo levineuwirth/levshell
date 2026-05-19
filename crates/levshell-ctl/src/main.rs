@@ -352,6 +352,17 @@ enum ThemeCmd {
         #[arg(value_parser = ["on", "off", "toggle"], default_value = "toggle")]
         state: String,
     },
+
+    /// Follow the system (XDG desktop-portal) light/dark preference.
+    /// When on, each OS color-scheme flip switches to the active
+    /// theme's paired variant; a manual `theme set` / `toggle-mode`
+    /// wins until the next OS flip. Off by default; not persisted
+    /// across daemon restarts.
+    FollowSystem {
+        /// `on`, `off`, or `toggle` (default).
+        #[arg(value_parser = ["on", "off", "toggle"], default_value = "toggle")]
+        state: String,
+    },
 }
 
 #[derive(Debug, Copy, Clone, ValueEnum)]
@@ -587,6 +598,10 @@ fn build_request(cmd: Command) -> CtlRequest {
             },
             ThemeCmd::Presentation { state } => CtlRequest::Theme {
                 action: ThemeAction::Presentation,
+                name: Some(state),
+            },
+            ThemeCmd::FollowSystem { state } => CtlRequest::Theme {
+                action: ThemeAction::FollowSystem,
                 name: Some(state),
             },
             ThemeCmd::Bootstrap { .. } => {
