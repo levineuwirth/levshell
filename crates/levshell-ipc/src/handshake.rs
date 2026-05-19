@@ -194,6 +194,17 @@ pub enum CtlRequest {
         #[serde(default)]
         urgency: NotifyUrgency,
     },
+
+    /// Persist one `levshell.toml` setting and apply it live. `key` is
+    /// a dotted path (`appearance.ui_scale`, `appearance.follow_system`,
+    /// `shell.density`); `value` is its string form. The daemon
+    /// validates, writes the file (comments preserved), and re-applies
+    /// — same posture as the runtime density/scale commands, which
+    /// still win afterward.
+    SetConfig {
+        key: String,
+        value: String,
+    },
 }
 
 fn default_widget_data() -> String {

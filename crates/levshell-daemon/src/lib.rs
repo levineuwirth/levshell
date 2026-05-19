@@ -820,6 +820,8 @@ async fn dispatch_ctl_request(request: CtlRequest, state: &SharedState) -> CtlRe
 
         CtlRequest::Data { action, path } => dispatch_data(state, action, &path).await,
 
+        CtlRequest::SetConfig { key, value } => dispatch_config(state, &key, &value).await,
+
         CtlRequest::Duck { action } => {
             let action_str = match action {
                 DuckAction::Open => "open",
@@ -1071,6 +1073,50 @@ fn dispatch_theme(
                 summary: format!("follow-system {}", if on { "on" } else { "off" }),
             }
         }
+    }
+}
+
+/// Persist one `levshell.toml` setting and apply it live. Mirrors the
+/// runtime density/scale path for the apply step (same events), so a
+/// later `levshell-ctl density|scale|theme follow-system` still wins.
+/// The file write is `spawn_blocking` (tiny, but no sync I/O on the
+/// reactor — the recurring blocking-in-async guard).
+async fn dispatch_config(state: &SharedState, key: &str, value: &str) -> CtlResponse {
+    let Some(path) = levshell_config::default_settings_path() else {
+        return CtlResponse::Error {
+            message: "no config base dir (set XDG_CONFIG_HOME or HOME)".into(),
+        };
+    };
+    let (k, v) = (key.to_owned(), value.to_owned());
+    match tokio::task::spawn_blocking(move || levshell_config::write_setting(&path, &k, &v))
+        .await
+    {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => return CtlResponse::Error { message: e },
+        Err(e) => {
+            return CtlResponse::Error {
+                message: format!("config write task failed: {e}"),
+            }
+        }
+    }
+
+    // Apply live through the same paths the runtime commands use.
+    match key {
+        "appearance.ui_scale" => state.bus.publish(Event::UiScaleRequested {
+            value: value.to_owned(),
+        }),
+        "shell.density" => state.bus.publish(Event::BarDensityRequested {
+            mode: value.to_owned(),
+        }),
+        "appearance.follow_system" => {
+            let on = if value == "true" { "on" } else { "off" };
+            state.theme.set_follow_system(Some(on));
+        }
+        _ => {}
+    }
+
+    CtlResponse::ContextSnapshotResult {
+        summary: format!("config: {key} = {value} (persisted + applied)"),
     }
 }
 
