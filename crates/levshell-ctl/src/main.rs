@@ -165,6 +165,14 @@ enum Command {
         #[arg(long, value_enum, default_value_t = CliUrgency::Normal)]
         urgency: CliUrgency,
     },
+
+    /// Read or persist a `levshell.toml` setting (UI scale, density,
+    /// follow-system). `set` writes the file (comments preserved) and
+    /// applies it live; runtime commands still override afterward.
+    Config {
+        #[command(subcommand)]
+        action: ConfigCmd,
+    },
 }
 
 #[derive(Debug, Copy, Clone, ValueEnum)]
@@ -250,6 +258,23 @@ fn params_to_json(params: &[String]) -> String {
 enum AnkiCmd {
     /// Print the number of flashcards currently due.
     DueCount,
+}
+
+#[derive(Debug, Subcommand)]
+enum ConfigCmd {
+    /// Persist a setting and apply it live. Key is one of
+    /// `appearance.ui_scale`, `appearance.follow_system`,
+    /// `shell.density`.
+    Set {
+        /// Dotted key, e.g. `appearance.ui_scale`.
+        key: String,
+        /// Value, e.g. `1.75` / `true` / `compact`.
+        value: String,
+    },
+    /// Print the effective settings (local; no daemon needed).
+    Get,
+    /// Print the levshell.toml path (local; no daemon needed).
+    Path,
 }
 
 #[derive(Debug, Subcommand)]
@@ -479,6 +504,25 @@ async fn real_main() -> Result<()> {
     {
         return run_theme_bootstrap(*force);
     }
+    if let Command::Config { action } = &cli.command {
+        match action {
+            ConfigCmd::Get => {
+                let s = levshell_config::load_settings();
+                println!("ui_scale      = {:?}", s.ui_scale());
+                println!("density       = {:?}", s.density());
+                println!("follow_system = {}", s.follow_system());
+                return Ok(());
+            }
+            ConfigCmd::Path => {
+                match levshell_config::default_settings_path() {
+                    Some(p) => println!("{}", p.display()),
+                    None => eprintln!("levshell-ctl: no config base dir (set XDG_CONFIG_HOME or HOME)"),
+                }
+                return Ok(());
+            }
+            ConfigCmd::Set { .. } => {} // → daemon (write + apply live)
+        }
+    }
 
     let socket_path = match cli.socket {
         Some(p) => p,
@@ -682,6 +726,11 @@ fn build_request(cmd: Command) -> CtlRequest {
                 TimerCmd::Stop => TimerAction::Stop,
                 TimerCmd::Skip => TimerAction::Skip,
             },
+        },
+        Command::Config { action } => match action {
+            ConfigCmd::Set { key, value } => CtlRequest::SetConfig { key, value },
+            // Get / Path are handled in real_main before IPC dispatch.
+            _ => unreachable!("config get/path are local-only"),
         },
     }
 }

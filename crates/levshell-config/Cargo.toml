@@ -14,6 +14,7 @@ levshell-ipc.workspace = true
 config.workspace = true
 serde.workspace = true
 toml.workspace = true
+toml_edit.workspace = true
 notify.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
