@@ -260,9 +260,9 @@ pub async fn run_with_sync(
 
     let theme = Arc::new(ThemeService::new(config.themes_dir.clone(), bus.clone()));
     theme.load_default();
-    if settings.follow_system() {
-        theme.set_follow_system(Some("on"));
-    }
+    // ui_scale / density / follow_system are all applied via
+    // `apply_settings` on shell connect (and on every levshell.toml
+    // change, via the settings watcher) — one path, no boot special-case.
 
     // Theme hot-reload (spec §3.9): editing the active theme's TOML
     // re-pushes its payload live, matching the profile watcher. Kept
@@ -290,6 +290,25 @@ pub async fn run_with_sync(
     // System dark/light follow (XDG portal). Inert until
     // `levshell-ctl theme follow-system on`. Kept alive for the run.
     let _appearance_watcher = spawn_appearance_watcher(theme.clone());
+
+    // levshell.toml hot-reload: an external editor edit (or a
+    // `levshell-ctl config set`) re-applies live, mirroring the theme
+    // watcher. Kept alive for the run.
+    let _settings_watcher = match levshell_config::default_config_base() {
+        Some(dir) => match spawn_settings_watcher(&dir, bus.clone(), theme.clone()) {
+            Ok(w) => {
+                tracing::info!(dir = %dir.display(),
+                    "settings hot-reload watcher started");
+                Some(w)
+            }
+            Err(e) => {
+                tracing::warn!(error = %e,
+                    "failed to start settings watcher; hot-reload disabled");
+                None
+            }
+        },
+        None => None,
+    };
 
     // 3. Bind the IPC server.
     let server = IpcServer::bind(&config.socket_path)
@@ -437,24 +456,15 @@ pub async fn run_with_sync(
                         }
                         state.module_count.store(r.handles().len(), Ordering::SeqCst);
 
-                        // Seed UI scale / density from levshell.toml now
-                        // that the context engine is registered: it
-                        // resolves these exactly like the ctl commands
-                        // (Event -> context_engine -> {UiScale,
-                        // BarDensity}State -> shell), so the configured
-                        // defaults reach Theme.qml on first frame with
-                        // no new push plumbing. Runtime ctl overrides
-                        // still win (they publish the same events later).
-                        if let Some(scale) = settings.ui_scale() {
-                            bus.publish(Event::UiScaleRequested {
-                                value: scale.to_string(),
-                            });
-                        }
-                        if let Some(density) = settings.density() {
-                            bus.publish(Event::BarDensityRequested {
-                                mode: density.to_owned(),
-                            });
-                        }
+                        // Apply levshell.toml now that the context
+                        // engine is registered: apply_settings publishes
+                        // the same events the ctl commands do (Event ->
+                        // context_engine -> {UiScale,BarDensity}State ->
+                        // shell) + follow-system, so configured defaults
+                        // reach Theme.qml on first frame. Runtime ctl
+                        // still wins (same events, published later). The
+                        // settings watcher calls this same fn on edits.
+                        apply_settings(&settings, &bus, &theme);
 
                         // Drop our publisher clone so the only remaining
                         // references live inside the registered modules.
@@ -1120,6 +1130,62 @@ async fn dispatch_config(state: &SharedState, key: &str, value: &str) -> CtlResp
     }
 }
 
+/// Apply file-level settings: seed UI scale + density through the same
+/// events the runtime commands use (so a later ctl override wins) and
+/// set follow-system. Idempotent — called on shell connect AND on
+/// every `levshell.toml` change.
+fn apply_settings(s: &levshell_config::Settings, bus: &EventBus, theme: &ThemeService) {
+    if let Some(scale) = s.ui_scale() {
+        bus.publish(Event::UiScaleRequested {
+            value: scale.to_string(),
+        });
+    }
+    if let Some(density) = s.density() {
+        bus.publish(Event::BarDensityRequested {
+            mode: density.to_owned(),
+        });
+    }
+    theme.set_follow_system(Some(if s.follow_system() { "on" } else { "off" }));
+}
+
+/// Handle to the levshell.toml watcher (OS watch + reload task). Drop
+/// to stop. Mirrors the theme/appearance watcher holders.
+pub struct SettingsWatcher {
+    _watcher: levshell_config::ConfigWatcher,
+    _task: tokio::task::JoinHandle<()>,
+}
+
+impl std::fmt::Debug for SettingsWatcher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SettingsWatcher").finish_non_exhaustive()
+    }
+}
+
+/// Watch the config base dir; on any `*.toml` change re-load and
+/// re-apply `levshell.toml` (`load_settings` always reads the one
+/// path, so an unrelated sibling edit is a cheap idempotent re-apply
+/// — same stateless policy as the theme watcher). Fail-soft.
+fn spawn_settings_watcher(
+    dir: &std::path::Path,
+    bus: EventBus,
+    theme: Arc<ThemeService>,
+) -> Result<SettingsWatcher, levshell_config::WatcherError> {
+    let (watcher, mut rx) = levshell_config::watch_config_dir(dir)?;
+    let task = tokio::spawn(async move {
+        while rx.recv().await.is_some() {
+            while rx.try_recv().is_ok() {} // coalesce write storms
+            let s = levshell_config::load_settings();
+            apply_settings(&s, &bus, &theme);
+            tracing::info!("settings hot-reload: levshell.toml re-applied");
+        }
+        tracing::debug!("settings hot-reload: watcher channel closed");
+    });
+    Ok(SettingsWatcher {
+        _watcher: watcher,
+        _task: task,
+    })
+}
+
 async fn dispatch_projects(state: &SharedState) -> CtlResponse {
     let Some(registry) = state.projects.as_ref() else {
         return CtlResponse::Error {
@@ -1295,5 +1361,27 @@ mod route_tests {
             Ok(Event::ProcessListRequested)
         ));
         assert!(generic.try_recv().is_err(), "should not double-route");
+    }
+
+    #[test]
+    fn apply_settings_publishes_scale_and_density_events() {
+        let mut s = levshell_config::Settings::default();
+        s.shell.density = Some("compact".into());
+        s.appearance.ui_scale = Some(1.5);
+        let bus = EventBus::new();
+        let mut scale = bus.subscribe("sc", [EventKind::UiScaleRequested], 4);
+        let mut dens = bus.subscribe("de", [EventKind::BarDensityRequested], 4);
+        let theme = ThemeService::new(None, bus.clone());
+
+        apply_settings(&s, &bus, &theme);
+
+        assert!(matches!(
+            scale.try_recv(),
+            Ok(Event::UiScaleRequested { value }) if value == "1.5"
+        ));
+        assert!(matches!(
+            dens.try_recv(),
+            Ok(Event::BarDensityRequested { mode }) if mode == "compact"
+        ));
     }
 }
