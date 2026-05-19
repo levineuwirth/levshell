@@ -98,14 +98,24 @@ fn walk(
         if ws_name == SCRATCHPAD_WORKSPACE {
             return; // skip scratchpad entirely
         }
-        if node.focused && focused_workspace.is_none() {
-            *focused_workspace = Some(ws_name.clone());
-        }
         active_workspace = Some(ws_name);
     } else if let Some(ws) = active_workspace.as_deref() {
         // Inside a workspace — check whether this node is a window.
         if let Some(snap) = window_from_node(node, ws, read_cmdline) {
             windows.push(snap);
+        }
+    }
+
+    // Record the focused workspace from whatever node carries focus.
+    // Sway sets `focused: true` on the focused *window con*, not its
+    // ancestor Workspace node (the workspace node is only `focused`
+    // when an empty workspace itself holds focus). Keying off the
+    // enclosing `active_workspace` of ANY focused node covers both
+    // cases; the earlier Workspace-only check silently captured
+    // `None` in the common "a window is focused" case.
+    if node.focused && focused_workspace.is_none() {
+        if let Some(ws) = active_workspace.as_deref() {
+            *focused_workspace = Some(ws.to_owned());
         }
     }
 
@@ -277,6 +287,39 @@ mod tests {
         );
         assert!(!w.floating);
         assert_eq!(snap.focused_workspace.as_deref(), Some("3:code"));
+    }
+
+    #[test]
+    fn focused_workspace_follows_a_focused_window_con() {
+        // The real-world case: sway marks the focused *window con*
+        // focused, and its ancestor Workspace node is NOT focused.
+        // The old Workspace-only check returned None here (focus
+        // restore silently dead); it must now resolve to "2:web".
+        let win = build_node(
+            4,
+            Some("draft.md"),
+            "con",
+            true, // focused window
+            vec![],
+            vec![],
+            json!({ "app_id": "neovide", "pid": 1234 }),
+        );
+        let ws = build_node(
+            3,
+            Some("2:web"),
+            "workspace",
+            false, // workspace node itself NOT focused
+            vec![win],
+            vec![],
+            json!({}),
+        );
+        let output =
+            build_node(2, Some("HDMI-0"), "output", false, vec![ws], vec![], json!({}));
+        let root = build_node(1, Some("root"), "root", false, vec![output], vec![], json!({}));
+        let tree = from_value(root);
+        let snap = capture_from_tree("x", &tree, |_| Some(vec!["neovide".into()]));
+        assert_eq!(snap.windows.len(), 1);
+        assert_eq!(snap.focused_workspace.as_deref(), Some("2:web"));
     }
 
     #[test]
