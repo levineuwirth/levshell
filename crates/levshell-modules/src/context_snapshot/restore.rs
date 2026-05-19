@@ -159,6 +159,7 @@ fn find_best_match(
     consumed: &HashSet<i64>,
 ) -> Option<usize> {
     let mut exact_title = None;
+    let mut same_ws = None;
     let mut any = None;
     for (i, w) in live.iter().enumerate() {
         if consumed.contains(&w.con_id) {
@@ -171,11 +172,21 @@ fn find_best_match(
             exact_title = Some(i);
             break;
         }
+        // No title match yet — among ambiguous same-app candidates,
+        // prefer one already on the saved workspace. This makes the
+        // plan a no-op for an unchanged desktop (was: "first unused in
+        // tree order", which churned and could swap two distinct
+        // same-app windows onto each other's workspaces). Exact title
+        // still wins outright — a stable unique title is the strongest
+        // identity signal and should follow the window across spaces.
+        if same_ws.is_none() && w.workspace == saved.workspace {
+            same_ws = Some(i);
+        }
         if any.is_none() {
             any = Some(i);
         }
     }
-    exact_title.or(any)
+    exact_title.or(same_ws).or(any)
 }
 
 #[cfg(test)]
@@ -324,5 +335,49 @@ mod tests {
         let plan = plan_restore(&snap, &live);
         assert!(plan.moves.is_empty());
         assert_eq!(plan.skipped_unrestorable, 1);
+    }
+
+    #[test]
+    fn same_app_drifted_titles_prefer_same_workspace_no_churn() {
+        // The exact scenario the live verification hit: two fungible
+        // `foot` windows whose titles have all drifted since capture
+        // (no exact-title match). Each is already on its saved
+        // workspace. Old policy ("first unused in tree order") matched
+        // saved@ws2 to the live window on ws6 and vice-versa → two
+        // pointless cross-moves (and would swap distinct terminals).
+        // Same-workspace preference must make this a no-op.
+        let snap = snapshot(vec![
+            saved("foot", "old-a", "2", None),
+            saved("foot", "old-b", "6", None),
+        ]);
+        // Tree order puts the ws6 window first — this is what made the
+        // old first-unused fallback churn.
+        let live = vec![
+            live(10, "foot", "new-y", "6"),
+            live(11, "foot", "new-x", "2"),
+        ];
+        let plan = plan_restore(&snap, &live);
+        assert!(
+            plan.moves.is_empty(),
+            "expected no moves, got {:?}",
+            plan.moves
+        );
+        assert!(plan.launches.is_empty());
+    }
+
+    #[test]
+    fn exact_title_still_wins_over_same_workspace() {
+        // A stable unique title is the strongest identity signal: a
+        // window that kept its title must follow it across workspaces
+        // even though a same-app window already sits on the target.
+        let snap = snapshot(vec![saved("foot", "build-log", "3", None)]);
+        let live = vec![
+            live(20, "foot", "scratch", "3"),   // same ws, wrong window
+            live(21, "foot", "build-log", "5"), // the real one, elsewhere
+        ];
+        let plan = plan_restore(&snap, &live);
+        assert_eq!(plan.moves.len(), 1);
+        assert_eq!(plan.moves[0].con_id, 21);
+        assert_eq!(plan.moves[0].target_workspace, "3");
     }
 }
