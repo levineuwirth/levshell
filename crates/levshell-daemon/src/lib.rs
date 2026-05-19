@@ -253,8 +253,16 @@ pub async fn run_with_sync(
     // shell's WidgetPublisher binds later (on handshake); until then
     // activate() records the theme in-memory so on-connect push
     // catches the shell up with no re-load.
+    // Global config (`~/.config/levshell/levshell.toml`). Fail-soft:
+    // a missing/bad file yields defaults. Seeds initial UI-scale /
+    // density / follow-system; runtime `levshell-ctl` still wins.
+    let settings = levshell_config::load_settings();
+
     let theme = Arc::new(ThemeService::new(config.themes_dir.clone(), bus.clone()));
     theme.load_default();
+    if settings.follow_system() {
+        theme.set_follow_system(Some("on"));
+    }
 
     // Theme hot-reload (spec §3.9): editing the active theme's TOML
     // re-pushes its payload live, matching the profile watcher. Kept
@@ -428,6 +436,25 @@ pub async fn run_with_sync(
                             r.register(module).await;
                         }
                         state.module_count.store(r.handles().len(), Ordering::SeqCst);
+
+                        // Seed UI scale / density from levshell.toml now
+                        // that the context engine is registered: it
+                        // resolves these exactly like the ctl commands
+                        // (Event -> context_engine -> {UiScale,
+                        // BarDensity}State -> shell), so the configured
+                        // defaults reach Theme.qml on first frame with
+                        // no new push plumbing. Runtime ctl overrides
+                        // still win (they publish the same events later).
+                        if let Some(scale) = settings.ui_scale() {
+                            bus.publish(Event::UiScaleRequested {
+                                value: scale.to_string(),
+                            });
+                        }
+                        if let Some(density) = settings.density() {
+                            bus.publish(Event::BarDensityRequested {
+                                mode: density.to_owned(),
+                            });
+                        }
 
                         // Drop our publisher clone so the only remaining
                         // references live inside the registered modules.
