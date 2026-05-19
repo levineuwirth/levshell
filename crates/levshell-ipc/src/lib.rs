@@ -22,14 +22,15 @@ pub use error::{IpcError, Result, MAX_FRAME_SIZE};
 pub use handshake::{
     ClientRole, ContextSnapshotAction, CtlRequest, CtlResponse, DataAction, DuckAction, Hello,
     NotifyUrgency,
-    PaletteAction, ProfileAction, ProjectSummary, StatusSnapshot, ThemeAction, ThemeSnapshot,
-    TimerAction, WarmupAction, PROTOCOL_VERSION,
+    PaletteAction, ProfileAction, ProjectSummary, SettingsAction, StatusSnapshot, ThemeAction,
+    ThemeSnapshot, TimerAction, WarmupAction, PROTOCOL_VERSION,
 };
 pub use messages::{
     BarDensity, BarDensityState, BarLayout, ClockHubPayload, CommandPaletteQuery,
     CommandPaletteSelect, ProcInfo, ProcessListPayload,
     CriticalEscalation, DaemonMessage, DensityChange, DuckSay, DuckToken, EscalationLevel,
-    Nudge, PowerState, PresentationMode, Prominence, ShellMessage, ThemeBar, ThemeColors,
+    Nudge, PowerState, PresentationMode, Prominence, SettingsActionMsg, SettingsPanel,
+    ShellMessage, ThemeBar, ThemeColors,
     ThemeHealth,
     ThemePayload, ThemeTypography, UiScaleState, WarmupEvent, WarmupPayload, WarmupProject,
     WidgetAction,

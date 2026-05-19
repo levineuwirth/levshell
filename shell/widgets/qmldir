@@ -33,3 +33,4 @@ ProjectPulsePanel 1.0 ProjectPulsePanel.qml
 LatexStatusWidget 1.0 LatexStatusWidget.qml
 ArxivWatchWidget 1.0 ArxivWatchWidget.qml
 ArxivWatchPanel 1.0 ArxivWatchPanel.qml
+SettingsPanel 1.0 SettingsPanel.qml

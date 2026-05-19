@@ -162,6 +162,9 @@ pub enum CtlRequest {
     /// Open / close / reset the rubber-duck overlay (spec §2.12.6).
     Duck { action: DuckAction },
 
+    /// Show / hide the in-shell settings overlay.
+    Settings { action: SettingsAction },
+
     /// Count flashcards currently due (`due_at <= now`). Spec §2.19.1
     /// (`levshell-ctl anki due-count`); the daemon replies
     /// [`CtlResponse::Count`].
@@ -403,6 +406,22 @@ pub enum PaletteAction {
     Close,
     Toggle,
     Query,
+}
+
+/// What to do with the on-shell settings overlay. See
+/// [`CtlRequest::Settings`]. The panel drives the same runtime paths as
+/// the `scale` / `density` / `theme` commands once open; these actions
+/// only govern its visibility.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum SettingsAction {
+    /// Reveal the overlay.
+    Open,
+    /// Hide the overlay.
+    Close,
+    /// Flip the overlay's visibility.
+    Toggle,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -27,8 +27,8 @@ use levshell_config::{
 };
 use levshell_core::{Event, EventBus};
 use levshell_ipc::{
-    DaemonMessage, PresentationMode, ThemeBar, ThemeColors, ThemeHealth, ThemePayload,
-    ThemeSnapshot, ThemeTypography, WidgetPublisher,
+    DaemonMessage, PresentationMode, SettingsPanel, ThemeBar, ThemeColors, ThemeHealth,
+    ThemePayload, ThemeSnapshot, ThemeTypography, WidgetPublisher,
 };
 
 pub const MODULE_NAME: &str = "theme";
@@ -49,6 +49,9 @@ struct Inner {
     publisher: Option<WidgetPublisher>,
     /// Presentation mode (spec §2.18) — muted non-critical surfaces.
     presentation: bool,
+    /// Settings overlay visibility. Runtime-only (no config
+    /// persistence); the shell mirrors this to show/hide the panel.
+    settings_open: bool,
     /// Following the XDG portal light/dark preference. Off by default;
     /// runtime-only (no config persistence).
     follow_system: bool,
@@ -79,6 +82,7 @@ impl ThemeService {
                 active_name: None,
                 publisher: None,
                 presentation: false,
+                settings_open: false,
                 follow_system: false,
                 last_scheme: None,
             }),
@@ -256,6 +260,39 @@ impl ThemeService {
             .lock()
             .expect("theme service lock poisoned")
             .presentation
+    }
+
+    /// Toggle / set the settings-overlay visibility. `arg` is `"open"`,
+    /// `"close"`, or `"toggle"` / `None` (flip). Pushes
+    /// [`DaemonMessage::SettingsPanel`] to the shell so it shows/hides
+    /// the panel. Runtime-only — no bus event, no config persistence.
+    /// Returns the new open state.
+    pub fn set_settings_open(&self, arg: Option<&str>) -> bool {
+        let (open, publisher) = {
+            let mut guard = self.inner.lock().expect("theme service lock poisoned");
+            let open = match arg {
+                Some("open") => true,
+                Some("close") => false,
+                _ => !guard.settings_open, // "toggle" / None / unknown
+            };
+            guard.settings_open = open;
+            (open, guard.publisher.clone())
+        };
+        if let Some(p) = publisher {
+            if let Err(e) = p.try_send(DaemonMessage::SettingsPanel(SettingsPanel { open })) {
+                tracing::warn!(error = %e, "theme: failed to push SettingsPanel");
+            }
+        }
+        tracing::info!(open, "theme: settings overlay");
+        open
+    }
+
+    /// Current settings-overlay state.
+    pub fn settings_open(&self) -> bool {
+        self.inner
+            .lock()
+            .expect("theme service lock poisoned")
+            .settings_open
     }
 
     /// Enable / disable / toggle following the system light-dark
