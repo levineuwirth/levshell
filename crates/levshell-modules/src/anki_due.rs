@@ -67,7 +67,13 @@ impl AnkiDueModule {
             widget_id: ANKI_DUE_WIDGET_ID.into(),
             widget_type: ANKI_DUE_WIDGET_TYPE.into(),
             state: serde_json::json!({ "due": due }),
-            status: WidgetStatus::Normal,
+            // Self-park (collapse to zero width) when nothing is due —
+            // the badge only earns bar space when there are cards.
+            status: if due == 0 {
+                WidgetStatus::Unavailable
+            } else {
+                WidgetStatus::Normal
+            },
             escalation: Default::default(),
         };
         if let Err(e) = self.publisher.try_send(DaemonMessage::WidgetUpdate(update)) {

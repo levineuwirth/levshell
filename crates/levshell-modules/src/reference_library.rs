@@ -125,7 +125,13 @@ impl ReferenceLibraryModule {
                 "recent_count": recent_count,
                 "recent": recent,
             }),
-            status: WidgetStatus::Normal,
+            // Self-park when the library is empty — nothing to surface
+            // until at least one reference exists.
+            status: if total == 0 {
+                WidgetStatus::Unavailable
+            } else {
+                WidgetStatus::Normal
+            },
             escalation: Default::default(),
         };
         if let Err(e) = self.publisher.try_send(DaemonMessage::WidgetUpdate(update)) {

@@ -230,7 +230,13 @@ impl ArxivWatchModule {
                 "new_count": items.len(),
                 "items": items,
             }),
-            status: WidgetStatus::Normal,
+            // Self-park when there are no fresh papers — the widget
+            // surfaces only to announce new arrivals.
+            status: if items.is_empty() {
+                WidgetStatus::Unavailable
+            } else {
+                WidgetStatus::Normal
+            },
             escalation: Default::default(),
         };
         if let Err(e) = self.publisher.try_send(DaemonMessage::WidgetUpdate(update)) {
