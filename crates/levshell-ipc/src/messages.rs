@@ -57,6 +57,12 @@ pub enum DaemonMessage {
     /// the active assistant turn; `done = true` finalizes it. `role`
     /// is `"assistant"` in practice.
     DuckToken(DuckToken),
+    /// Backend health for the rubber-duck overlay. Lets the shell show
+    /// a dedicated "disabled / Ollama unreachable" banner with the
+    /// configured endpoint + model instead of only a cryptic inline
+    /// `(rubber-duck error: …)` token. Pushed on open, and on every
+    /// send attempt completing (so the banner clears on recovery).
+    DuckStatus(DuckStatus),
     /// A widget crossed into [`EscalationLevel::Critical`]. Per spec
     /// design §9 rule 3, Critical entry emits a notification as the
     /// user's escape hatch if they've hidden the widget. Fires once
@@ -101,6 +107,14 @@ pub struct PresentationMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SettingsPanel {
     pub open: bool,
+    /// Current follow-system-theme preference (ThemeService state).
+    #[serde(default)]
+    pub follow_system: bool,
+    /// True when no XDG appearance portal backend is available, so
+    /// follow-system can be set but has no effect — the panel renders
+    /// it with an "inert here" note instead of silently doing nothing.
+    #[serde(default)]
+    pub follow_system_inert: bool,
 }
 
 /// Payload for [`DaemonMessage::Nudge`]. `kind` is the ideation
@@ -292,6 +306,25 @@ pub struct DuckToken {
     /// `true` on the last frame — the shell uses this to commit the
     /// assistant turn (stop the typing cursor, allow send again).
     pub done: bool,
+}
+
+/// Backend health for the rubber-duck overlay (daemon → shell).
+/// Carries the configured endpoint + model so the shell can render an
+/// actionable banner ("start `ollama serve`") rather than guessing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DuckStatus {
+    /// `rubber-duck.toml: enabled`. When false the overlay is inert by
+    /// configuration, not by a transient failure.
+    pub enabled: bool,
+    /// Whether the last interaction with Ollama succeeded. Optimistic
+    /// (`true`) until a send fails; flips back on the next success.
+    pub reachable: bool,
+    /// Configured Ollama endpoint, e.g. `http://localhost:11434`.
+    pub endpoint: String,
+    /// Configured model tag, e.g. `llama3.2:3b`.
+    pub model: String,
+    /// Human-readable failure detail (the underlying error), or empty.
+    pub detail: String,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]

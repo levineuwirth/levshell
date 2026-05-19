@@ -29,6 +29,7 @@ pub use messages::{
     BarDensity, BarDensityState, BarLayout, ClockHubPayload, CommandPaletteQuery,
     CommandPaletteSelect, ProcInfo, ProcessListPayload,
     CriticalEscalation, DaemonMessage, DensityChange, DuckSay, DuckToken, EscalationLevel,
+    DuckStatus,
     Nudge, PowerState, PresentationMode, Prominence, SettingsActionMsg, SettingsPanel,
     ShellMessage, ThemeBar, ThemeColors,
     ThemeHealth,

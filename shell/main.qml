@@ -158,6 +158,11 @@ Scope {
     property bool duckOpen: false
     property bool duckStreaming: false
     property var duckMessages: []
+    // Backend health (DaemonMessage::DuckStatus) → overlay banner.
+    property var duckStatus: ({
+        enabled: true, reachable: true,
+        endpoint: "", model: "", detail: ""
+    })
 
     // Presentation mode (spec §2.18): mute non-critical surfaces for
     // talks / screen-sharing. Driven by the daemon's theme service.
@@ -168,6 +173,10 @@ Scope {
     // same runtime paths as `levshell-ctl scale|density|theme` by
     // sending ShellMessage::SettingsAction back to the daemon.
     property bool settingsOpen: false
+    // Follow-system theme state + whether it's inert here (no XDG
+    // appearance portal backend) — surfaced in the settings panel.
+    property bool settingsFollowSystem: false
+    property bool settingsFollowSystemInert: false
 
     // Ideation nudge toast (§2.9.2). Single-slot — nudges are Poisson-
     // spaced (λ≈45min) so the latest simply replaces any showing one.
@@ -517,6 +526,16 @@ Scope {
             shell.appendDuckToken(msg);
             break;
         }
+        case "duck_status": {
+            shell.duckStatus = {
+                enabled: msg.enabled !== false,
+                reachable: msg.reachable !== false,
+                endpoint: msg.endpoint || "",
+                model: msg.model || "",
+                detail: msg.detail || ""
+            };
+            break;
+        }
         case "nudge": {
             shell.showNudge(msg);
             break;
@@ -533,6 +552,8 @@ Scope {
         }
         case "settings_panel": {
             shell.settingsOpen = !!msg.open;
+            shell.settingsFollowSystem = !!msg.follow_system;
+            shell.settingsFollowSystemInert = !!msg.follow_system_inert;
             break;
         }
         case "critical_escalation": {
@@ -1330,6 +1351,8 @@ Scope {
             presentationOn: shell.presentationMode
             themeName: Theme.themeName
             themeVariant: Theme.mode
+            followSystem: shell.settingsFollowSystem
+            followSystemInert: shell.settingsFollowSystemInert
             onAction: (action, data) => shell.sendSettingsAction(action, data)
             onDismiss: shell.sendSettingsAction("close", {})
         }
@@ -1787,6 +1810,7 @@ Scope {
             isOpen: shell.duckOpen
             messages: shell.duckMessages
             streaming: shell.duckStreaming
+            status: shell.duckStatus
             onDismissed: shell.duckOpen = false
             onSubmit: (text) => shell.sendDuckMessage(text)
         }

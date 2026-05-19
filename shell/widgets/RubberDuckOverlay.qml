@@ -21,6 +21,15 @@ Rectangle {
     property bool isOpen: false
     property var messages: []
     property bool streaming: false
+    // Backend health (DaemonMessage::DuckStatus). When the duck is
+    // disabled or Ollama is unreachable we say so up-front instead of
+    // only emitting a cryptic "(rubber-duck error: …)" mid-chat.
+    property var status: ({
+        enabled: true, reachable: true,
+        endpoint: "", model: "", detail: ""
+    })
+    readonly property bool degraded:
+        !!status && (status.enabled === false || status.reachable === false)
 
     signal dismissed()
     signal submit(string text)
@@ -28,8 +37,11 @@ Rectangle {
     implicitWidth: Math.round(640 * Theme.uiScale)
     implicitHeight: Math.round(560 * Theme.uiScale)
 
+    // Use the *panel* opacity (0.97), like ProcessSniper / SettingsPanel
+    // — it was wired to the much lower *bar* opacity (0.80), which read
+    // as a broken see-through card with no compositor blur on wlroots.
     color: Qt.rgba(Theme.surface.r, Theme.surface.g, Theme.surface.b,
-                   Theme.onBattery ? Theme.barOpacityBattery : Theme.barOpacity)
+                   Theme.onBattery ? Theme.panelOpacityBattery : Theme.panelOpacity)
     Behavior on color { ColorAnimation { duration: Theme.motionNormal } }
     radius: Theme.panelCornerRadius
     border.width: Theme.panelBorderWidth
@@ -113,13 +125,61 @@ Rectangle {
 
         Rectangle { width: parent.width; height: 1; color: Theme.outline; opacity: 0.5 }
 
+        // Inert/unreachable banner — only when the backend can't serve.
+        Rectangle {
+            id: dpBanner
+            visible: root.degraded
+            width: parent.width
+            height: visible ? bannerCol.implicitHeight + 2 * Theme.spaceMd : 0
+            radius: Theme.panelCornerRadius
+            color: Qt.rgba(Theme.warning.r, Theme.warning.g, Theme.warning.b, 0.12)
+            border.width: 1
+            border.color: Theme.warning
+
+            Column {
+                id: bannerCol
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.margins: Theme.spaceMd
+                spacing: 2
+
+                Text {
+                    width: parent.width
+                    wrapMode: Text.WordWrap
+                    text: root.status.enabled === false
+                        ? "Rubber duck is disabled in config (rubber-duck.toml: enabled = false)."
+                        : "Ollama unreachable at " + (root.status.endpoint || "?")
+                          + " — start it with `ollama serve`"
+                          + (root.status.model
+                             ? "  (model: " + root.status.model + ")" : "")
+                    color: Theme.fg
+                    font.family: Theme.fontText
+                    font.pixelSize: Theme.typeCaption
+                    font.weight: Theme.typeTitleWeight
+                }
+                Text {
+                    visible: (root.status.detail || "").length > 0
+                    width: parent.width
+                    wrapMode: Text.WordWrap
+                    elide: Text.ElideRight
+                    maximumLineCount: 2
+                    text: root.status.detail || ""
+                    color: Theme.fgSubtle
+                    font.family: Theme.fontMono
+                    font.pixelSize: Theme.typeCaption
+                }
+            }
+        }
+
         // Message list.
         ListView {
             id: messageList
             width: parent.width
             height: parent.height
                 - dividerBottom.height - inputRow.implicitHeight
-                - 4 * Theme.spaceMd - Theme.typeTitle
+                - dpBanner.height - (root.degraded ? 5 : 4) * Theme.spaceMd
+                - Theme.typeTitle
             clip: true
             spacing: Theme.spaceSm
             model: root.messages

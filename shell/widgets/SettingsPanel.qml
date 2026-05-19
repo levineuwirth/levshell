@@ -22,6 +22,10 @@ Rectangle {
     property bool presentationOn: false
     property string themeName: ""
     property string themeVariant: "dark"
+    property bool followSystem: false
+    // No XDG appearance portal backend → follow-system is settable but
+    // has no effect; we say so rather than silently doing nothing.
+    property bool followSystemInert: false
 
     // action: a settings_action verb; data: optional JSON object.
     signal action(string name, var data)
@@ -273,6 +277,28 @@ Rectangle {
             label: "Presentation mode"
             on: root.presentationOn
             onToggled: root.action("presentation", { on: !root.presentationOn })
+        }
+
+        Column {
+            width: parent.width
+            spacing: 2
+
+            ToggleRow {
+                label: "Follow system theme"
+                on: root.followSystem
+                onToggled: root.action("follow_system", { on: !root.followSystem })
+            }
+            Text {
+                visible: root.followSystemInert
+                width: parent.width
+                wrapMode: Text.WordWrap
+                text: "Inert here — no XDG appearance portal backend "
+                    + "(wlroots doesn't implement Settings/appearance)."
+                color: Theme.fgSubtle
+                font.family: Theme.fontText
+                font.pixelSize: Theme.typeCaption
+                font.italic: true
+            }
         }
 
         Rectangle { width: parent.width; height: 1; color: Theme.outline; opacity: 0.5 }
